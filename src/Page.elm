@@ -6,6 +6,12 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 
 
+type Page
+    = Home
+    | Login
+    | RecallPriority
+
+
 
 -- MAIN (DO NOT USE)
 
@@ -15,8 +21,8 @@ main =
     text ""
 
 
-viewPage : Html msg -> Html msg
-viewPage content =
+viewPage : Page -> { title : String, content : Html msg } -> Html msg
+viewPage page { title, content } =
     div []
         [ viewHeader
         , content
@@ -47,29 +53,16 @@ viewHeader =
                     ]
                 , li [ class "nav-item" ]
                     [ a [ class "nav-link", href "#" ]
-                        [ text "Features" ]
+                        [ text "Prioritize Recalls" ]
                     ]
                 , li [ class "nav-item" ]
                     [ a [ class "nav-link", href "#" ]
-                        [ text "Pricing" ]
+                        [ text "Manage Investigators" ]
                     ]
-
-                -- , li [ class "nav-item dropdown" ]
-                --     [ a [ class "nav-link dropdown-toggle", href "#", id "navbarDropdownMenuLink", attribute "data-toggle" "dropdown", attribute "aria-haspopup" "true", attribute "aria-expanded" "false" ]
-                --         [ text "Dropdown link" ]
-                --     , div [ class "dropdown-menu", attribute "aria-labelledby" "navbarDropdownMenuLink" ]
-                --         [ a [ class "dropdown-item", href "#" ]
-                --             [ text "Action" ]
-                --         , a [ class "dropdown-item", href "#" ]
-                --             [ text "Another action" ]
-                --         , a [ class "dropdown-item", href "#" ]
-                --             [ text "Something else here" ]
-                --         ]
-                --     ]
                 ]
             ]
         , span [ class "navbar-text" ]
-            [ text "Login / Logout" ]
+            [ text "Logout" ]
         ]
 
 

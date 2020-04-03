@@ -48,12 +48,15 @@ update msg model =
 -- VIEW
 
 
-view : Html msg
-view =
-    div [ class "container" ]
-        [ div [ class "row" ]
-            [ div [ class "col-12" ]
-                [ text "This is the homepage"
+view : Model -> { title : String, content : Html Msg }
+view model =
+    { title = "Home Page"
+    , content =
+        div [ class "container" ]
+            [ div [ class "row" ]
+                [ div [ class "col-12" ]
+                    [ text "This is the homepage"
+                    ]
                 ]
             ]
-        ]
+    }
