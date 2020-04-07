@@ -1,8 +1,13 @@
-module Pages.Login exposing (..)
+module Pages.Login exposing (Model, Msg(..), init, subscriptions, toSession, update, view)
 
+import Data.User exposing (User, loginUser, userEncoder)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
+import Http
+import Json.Encode as JE
+import Route exposing (Route, replaceUrl)
+import Session exposing (Session, navKey, storeUser)
 
 
 
@@ -19,15 +24,29 @@ main =
 
 
 type alias Model =
-    { email : String
-    , password : String
-    , login_attempts : Int
+    { session : Session
+    , form : Form
+    , error : String
     }
 
 
-init : Model
-init =
-    Model "" "" 0
+type alias Form =
+    { email : String
+    , password : String
+    }
+
+
+init : Session -> ( Model, Cmd Msg )
+init session =
+    ( { session = session
+      , form =
+            { email = ""
+            , password = ""
+            }
+      , error = ""
+      }
+    , Cmd.none
+    )
 
 
 
@@ -35,22 +54,55 @@ init =
 
 
 type Msg
-    = LoginAttempt
-    | EmailUpdate String
-    | PasswordUpdate String
+    = GotSession Session
+    | UpdateEmail String
+    | UpdatePassword String
+    | SubmitLogin
+    | CancelLogin
+    | LoginCompleted (Result Http.Error User)
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        LoginAttempt ->
-            { model | login_attempts = model.login_attempts + 1 }
+        GotSession session ->
+            ( { model | session = session }, Cmd.none )
 
-        EmailUpdate s ->
-            { model | email = s }
+        UpdateEmail email ->
+            updateForm
+                (\form -> { form | email = email })
+                model
 
-        PasswordUpdate s ->
-            { model | password = s }
+        UpdatePassword password ->
+            updateForm
+                (\form -> { form | password = password })
+                model
+
+        SubmitLogin ->
+            ( model, loginUser model.form LoginCompleted )
+
+        CancelLogin ->
+            ( model, Cmd.none )
+
+        LoginCompleted result ->
+            case result of
+                Ok user ->
+                    ( model, saveUser user )
+
+                -- ( model, replaceUrl (navKey model.session) Route.Home )
+                Err e ->
+                    ( { model | error = "Invalid email or password" }, Cmd.none )
+
+
+saveUser : User -> Cmd msg
+saveUser user =
+    JE.encode 0 (userEncoder user)
+        |> storeUser
+
+
+updateForm : (Form -> Form) -> Model -> ( Model, Cmd Msg )
+updateForm transformForm model =
+    ( { model | form = transformForm model.form }, Cmd.none )
 
 
 
@@ -59,54 +111,54 @@ update msg model =
 
 view : Model -> { title : String, content : Html Msg }
 view model =
-    { title = "Login Page"
+    { title = "Login"
     , content =
-        div []
-            [ div [ class "container" ]
-                [ div [ id "login-row", class "row justify-content-center align-items-center" ]
-                    [ div [ id "login-column", class "col-md-6" ]
-                        [ div [ id "login-box", class "col-md-12" ]
-                            [ Html.form [ class "form" ]
-                                [ h3 [ class "text-center text-info" ]
-                                    [ text "Login" ]
-                                , div [ class "form-group" ]
-                                    [ label [ for "username", class "text-info" ]
-                                        [ text "Username:" ]
-                                    , br []
-                                        []
-                                    , input [ type_ "text", name "username", class "form-control" ]
-                                        []
-                                    ]
-                                , div [ class "form-group" ]
-                                    [ label [ for "password", class "text-info" ]
-                                        [ text "Password:" ]
-                                    , br []
-                                        []
-                                    , input [ type_ "password", name "password", class "form-control" ]
-                                        []
-                                    ]
-                                , div [ class "form-group" ]
-                                    [ label [ for "remember-me", class "text-info" ]
-                                        [ span []
-                                            [ text "Remember me" ]
-                                        , span []
-                                            [ input [ name "remember-me", type_ "checkbox" ]
-                                                []
-                                            ]
-                                        ]
-                                    , br []
-                                        []
-                                    , input [ type_ "submit", name "submit", class "btn btn-info btn-md", value "submit" ]
-                                        []
-                                    ]
-                                , div [ class "text-right" ]
-                                    [ a [ href "#", class "text-info" ]
-                                        [ text "Register here" ]
-                                    ]
-                                ]
-                            ]
+        div [ class "" ]
+            [ br [] []
+            , br [] []
+            , div [ class "container" ]
+                [ div [ class "row justify-content-center" ]
+                    [ h2 [ class "col-xl-6 col-lg-10 col-sm-12" ] [ text "Login" ]
+                    ]
+                , div [ class "row form-group justify-content-center" ]
+                    [ label [ for "inputEmail", class "col-sm-2 col-form-label" ]
+                        [ text "Email" ]
+                    , div [ class "col-xl-3 col-lg-5 col-sm-10" ]
+                        [ input [ type_ "text", class "form-control", id "inputEmail", placeholder "email@example.com", value model.form.email, onInput UpdateEmail ] []
                         ]
+                    ]
+                , div [ class "row form-group justify-content-center" ]
+                    [ label [ for "inputPassword", class "col-sm-2 col-form-label" ]
+                        [ text "Password" ]
+                    , div [ class "col-xl-3 col-lg-5 col-sm-10" ]
+                        [ input [ type_ "password", class "form-control", id "inputPassword", placeholder "Password", value model.form.password, onInput UpdatePassword ] []
+                        ]
+                    ]
+                , div [ class "row form-group justify-content-center" ]
+                    [ p [ class "text-danger justify-text" ] [ text model.error ]
+                    ]
+                , div [ class "row form-group justify-content-center" ]
+                    [ button [ type_ "button", class "btn btn-primary mx-5", onClick SubmitLogin ] [ text "Login" ]
+                    , button [ type_ "button", class "btn btn-danger mx-5", onClick CancelLogin ] [ text "Cancel" ]
                     ]
                 ]
             ]
     }
+
+
+
+-- SUBSCRIPTIONS
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.none
+
+
+
+-- EXPORTS
+
+
+toSession : Model -> Session
+toSession model =
+    model.session

@@ -1,4 +1,4 @@
-module Pages.Home exposing (Model, Msg, init, subscriptions, toSession, update, view)
+module Pages.Logout exposing (Model, Msg, init, subscriptions, toSession, update, view)
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
@@ -50,15 +50,9 @@ update msg model =
 
 view : Model -> { title : String, content : Html Msg }
 view model =
-    { title = "Home"
+    { title = "Logout"
     , content =
-        div [ class "container" ]
-            [ div [ class "row" ]
-                [ div [ class "col-12" ]
-                    [ text "This is the home page"
-                    ]
-                ]
-            ]
+        text ""
     }
 
 

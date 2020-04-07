@@ -1,10 +1,13 @@
 module Pages.RecallPriority exposing (..)
 
 import Browser
-import Data.Recall exposing (..)
+import Data.Recall exposing (Recall, searchRecalls, updateRecall)
 import Html exposing (..)
 import Html.Attributes exposing (..)
-import Html.Events exposing (onClick)
+import Html.Events exposing (onClick, onInput)
+import Http
+import Route exposing (Route, replaceUrl)
+import Session exposing (Session, navKey)
 
 
 
@@ -21,14 +24,43 @@ main =
 
 
 type alias Model =
-    { recallList : List Recall
+    { session : Session
+    , recallList : List Recall
     , detailsModal : Maybe Recall
+    , searchForm : SearchForm
     }
 
 
-init : Model
-init =
-    Model [ stubRecall, stubRecall2 ] Nothing
+type alias SearchForm =
+    { search : String
+    , sortBy : String
+    , limit : String
+    , offset : String
+    }
+
+
+init : Session -> ( Model, Cmd Msg )
+init session =
+    let
+        blankSearch =
+            { search = ""
+            , sortBy = ""
+            , limit = "10"
+            , offset = ""
+            }
+    in
+    case session of
+        Session.Manager _ _ ->
+            ( Model session [] Nothing blankSearch
+            , searchRecalls
+                blankSearch
+                UpdateRecallList
+            )
+
+        _ ->
+            ( Model session [] Nothing blankSearch
+            , replaceUrl (navKey session) Route.Home
+            )
 
 
 
@@ -39,32 +71,89 @@ type Msg
     = OpenDetails Recall
     | CloseDetails
     | ToggleHighPriority Recall
+    | UpdateRecallList (Result Http.Error (List Recall))
+    | UpdateRecallPriority (Result Http.Error Recall)
+    | SetSearch String
+    | SetSortBy String
+    | SubmitSearch
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update cmd model =
     case cmd of
         OpenDetails recall ->
-            { model | detailsModal = Just recall }
+            ( { model | detailsModal = Just recall }, Cmd.none )
 
         CloseDetails ->
-            { model | detailsModal = Nothing }
+            ( { model | detailsModal = Nothing }, Cmd.none )
 
         ToggleHighPriority updatedRecall ->
-            case model.detailsModal of
-                Just recall ->
+            ( model, updateRecall (toggleHighPriority updatedRecall) UpdateRecallPriority )
+
+        UpdateRecallList result ->
+            case result of
+                Ok recallList ->
+                    ( { model | recallList = recallList }, Cmd.none )
+
+                Err _ ->
+                    ( { model | recallList = [] }, Cmd.none )
+
+        UpdateRecallPriority result ->
+            case result of
+                Ok recall ->
                     let
-                        toggleHighPriority r =
-                            if r.recallId == updatedRecall.recallId then
-                                { r | isHighPriority = not updatedRecall.isHighPriority }
+                        updateRecalls oldRecall =
+                            if oldRecall.recallId == recall.recallId then
+                                recall
 
                             else
-                                recall
+                                oldRecall
                     in
-                    { model | recallList = List.map toggleHighPriority model.recallList }
+                    ( { model | recallList = List.map updateRecalls model.recallList }, Cmd.none )
 
-                Nothing ->
-                    model
+                Err _ ->
+                    ( model, Cmd.none )
+
+        SetSearch search ->
+            let
+                oldSearchForm =
+                    model.searchForm
+
+                updateSearchForm newSearch =
+                    { oldSearchForm | search = newSearch }
+            in
+            ( { model | searchForm = updateSearchForm search }
+            , Cmd.none
+            )
+
+        SetSortBy sortBy ->
+            let
+                oldSearchForm =
+                    model.searchForm
+
+                updateSearchForm newSortBy =
+                    { oldSearchForm | sortBy = newSortBy }
+
+                updatedModel =
+                    { model | searchForm = updateSearchForm sortBy }
+            in
+            ( updatedModel
+            , searchRecalls
+                (updateSearchForm sortBy)
+                UpdateRecallList
+            )
+
+        SubmitSearch ->
+            ( model
+            , searchRecalls
+                model.searchForm
+                UpdateRecallList
+            )
+
+
+toggleHighPriority : Recall -> Recall
+toggleHighPriority recall =
+    { recall | highPriority = not recall.highPriority }
 
 
 
@@ -79,45 +168,67 @@ view model =
             [ br [] []
             , br [] []
             , div [ class "container" ]
-                [ viewSearchControls
+                [ viewSearchControls model
                 ]
             , div [ class "container" ]
-                (List.map viewRecall model.recallList)
+                (if List.length model.recallList == 0 then
+                    [ br [] []
+                    , h2 [ class "text-danger text-center" ] [ text "No recalls found" ]
+                    ]
+
+                 else
+                    List.map viewRecall model.recallList
+                )
             , div []
                 [ case model.detailsModal of
                     Just recall ->
                         viewDetailsModal recall
 
                     Nothing ->
-                        p [] []
+                        text ""
                 ]
             ]
     }
 
 
-viewSearchControls : Html msg
-viewSearchControls =
+viewSearchControls : Model -> Html Msg
+viewSearchControls model =
     div [ id "search-row", class "row align-items-center bg-primary rounded justify-content-between", style "height" "65px" ]
         [ div [ class "input-group md-form form-sm form-2 pl-3", style "width" "300px" ]
-            [ input [ class "form-control my-0 py-1 red-border", type_ "text", placeholder "Search", attribute "ariaLabel" "Search" ]
+            [ input [ class "form-control my-0 py-1 red-border", type_ "text", placeholder "Search", attribute "ariaLabel" "Search", value model.searchForm.search, onInput SetSearch ]
                 []
             , div [ class "input-group-append" ]
-                [ span [ class "input-group-text red lighten-3", id "basic-text1" ]
-                    [ i [ class "text-grey", attribute "ariaHidden" "true" ]
-                        [ text "Search" ]
-                    ]
+                [ button
+                    [ type_ "button", class "btn btn-secondary", onClick SubmitSearch ]
+                    [ text "Search" ]
                 ]
             ]
         , div [ class "dropdown pr-3" ]
             [ button [ class "btn btn-light dropdown-toggle", type_ "button", id "dropdownMenu2", attribute "data-toggle" "dropdown", attribute "aria-haspopup" "true", attribute "aria-expanded" "false" ]
-                [ text "Sort By" ]
+                [ text
+                    (case model.searchForm.sortBy of
+                        "sortable_date" ->
+                            "Publish Date"
+
+                        "recall_number" ->
+                            "Recall Number"
+
+                        "high_priority" ->
+                            "High Priority"
+
+                        _ ->
+                            "Sort By"
+                    )
+                ]
             , div [ class "dropdown-menu", attribute "aria-labelledby" "dropdownMenu2" ]
-                [ button [ class "dropdown-item", type_ "button" ]
+                [ button [ class "dropdown-item", type_ "button", onClick (SetSortBy "sortable_date") ]
                     [ text "Publish Date" ]
-                , button [ class "dropdown-item", type_ "button" ]
+                , button [ class "dropdown-item", type_ "button", onClick (SetSortBy "recall_number") ]
                     [ text "Recall Number" ]
-                , button [ class "dropdown-item", type_ "button" ]
+                , button [ class "dropdown-item", type_ "button", onClick (SetSortBy "high_priority") ]
                     [ text "High Priority" ]
+                , button [ class "dropdown-item", type_ "button", onClick (SetSortBy "") ]
+                    [ text "None" ]
                 ]
             ]
         ]
@@ -127,14 +238,14 @@ viewRecall : Recall -> Html Msg
 viewRecall recall =
     div [ class "mx-5 my-3" ]
         [ div [ class "row justify-content-between" ]
-            [ h3 [ class "d-inline w-75" ] [ text recall.title ]
+            [ h3 [ class "d-inline w-75" ] [ text recall.recallHeading ]
             , div [ class "float-right w-25" ]
                 [ button [ class "btn btn-secondary mx-1", type_ "button", onClick (OpenDetails recall) ] [ text "Details" ]
-                , if recall.isHighPriority then
-                    button [ class "btn btn-danger mx-1", type_ "button", onClick (ToggleHighPriority recall) ] [ text "Unmark High Priority" ]
+                , if recall.highPriority then
+                    button [ class "btn btn-danger mx-1", type_ "button", onClick (ToggleHighPriority recall) ] [ text "Unprioritize" ]
 
                   else
-                    button [ class "btn btn-primary mx-1", type_ "button", onClick (ToggleHighPriority recall) ] [ text "Mark High Priority" ]
+                    button [ class "btn btn-primary mx-1", type_ "button", onClick (ToggleHighPriority recall) ] [ text "Prioritize" ]
                 ]
             ]
         , p [] [ text recall.description ]
@@ -165,31 +276,29 @@ viewDetailsModal recall =
 
 viewRecallDetails : Recall -> List (Html Msg)
 viewRecallDetails recall =
-    [ h3 [] [ text ("Title: " ++ recall.title) ]
-    , p []
-        [ a []
-            [ text ("Description: " ++ recall.description) ]
-        ]
-    , p [] [ text ("Description: " ++ recall.description) ]
-    , p [] [ text ("Publish Date: " ++ recall.recallDate) ]
-    , p [] [ text ("Hazards: " ++ mapHazards recall.hazards) ]
-    , p [] [ text ("Remedies: " ++ mapRemedies recall.remedies) ]
+    [ h2 [] [ text recall.recallHeading ]
+    , p [] [ text recall.description ]
+    , h4 [] [ text "Date" ]
+    , p [] [ text recall.date ]
+    , h4 [] [ text "Name of Product" ]
+    , p [] [ text recall.nameOfProduct ]
+    , h4 [] [ text "Units" ]
+    , p [] [ text recall.units ]
+    , h4 [] [ text "Manufactured In" ]
+    , p [] [ text recall.hazard ]
+    , h4 [] [ text "Hazard" ]
+    , p [] [ text recall.hazard ]
+    , h4 [] [ text "Remedy" ]
+    , p [] [ text recall.remedy ]
+    , h4 [] [ text "Incidents" ]
+    , p [] [ text recall.incidents ]
     ]
 
 
-mapHazards : List Data.Recall.Hazard -> String
-mapHazards hazard =
-    let
-        list =
-            List.map .name hazard
-    in
-    String.join " | " list
+
+-- EXPORTS
 
 
-mapRemedies : List Data.Recall.Remedy -> String
-mapRemedies remedies =
-    let
-        list =
-            List.map .name remedies
-    in
-    String.join " | " list
+toSession : Model -> Session
+toSession model =
+    model.session

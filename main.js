@@ -1529,7 +1529,7 @@ function _Json_runArrayDecoder(decoder, value, toElmValue)
 
 function _Json_isArray(value)
 {
-	return Array.isArray(value) || (typeof FileList !== 'undefined' && value instanceof FileList);
+	return Array.isArray(value) || (typeof FileList === 'function' && value instanceof FileList);
 }
 
 function _Json_toElmArray(array)
@@ -1874,19 +1874,19 @@ function _Platform_initialize(flagDecoder, args, init, update, subscriptions, st
 	var result = A2(_Json_run, flagDecoder, _Json_wrap(args ? args['flags'] : undefined));
 	$elm$core$Result$isOk(result) || _Debug_crash(2 /**/, _Json_errorToString(result.a) /**/);
 	var managers = {};
-	var initPair = init(result.a);
-	var model = initPair.a;
+	result = init(result.a);
+	var model = result.a;
 	var stepper = stepperBuilder(sendToApp, model);
 	var ports = _Platform_setupEffects(managers, sendToApp);
 
 	function sendToApp(msg, viewMetadata)
 	{
-		var pair = A2(update, msg, model);
-		stepper(model = pair.a, viewMetadata);
-		_Platform_enqueueEffects(managers, pair.b, subscriptions(model));
+		result = A2(update, msg, model);
+		stepper(model = result.a, viewMetadata);
+		_Platform_enqueueEffects(managers, result.b, subscriptions(model));
 	}
 
-	_Platform_enqueueEffects(managers, initPair.b, subscriptions(model));
+	_Platform_enqueueEffects(managers, result.b, subscriptions(model));
 
 	return ports ? { ports: ports } : {};
 }
@@ -4355,6 +4355,299 @@ function _Browser_load(url)
 		}
 	}));
 }
+
+
+
+// SEND REQUEST
+
+var _Http_toTask = F3(function(router, toTask, request)
+{
+	return _Scheduler_binding(function(callback)
+	{
+		function done(response) {
+			callback(toTask(request.expect.a(response)));
+		}
+
+		var xhr = new XMLHttpRequest();
+		xhr.addEventListener('error', function() { done($elm$http$Http$NetworkError_); });
+		xhr.addEventListener('timeout', function() { done($elm$http$Http$Timeout_); });
+		xhr.addEventListener('load', function() { done(_Http_toResponse(request.expect.b, xhr)); });
+		$elm$core$Maybe$isJust(request.tracker) && _Http_track(router, xhr, request.tracker.a);
+
+		try {
+			xhr.open(request.method, request.url, true);
+		} catch (e) {
+			return done($elm$http$Http$BadUrl_(request.url));
+		}
+
+		_Http_configureRequest(xhr, request);
+
+		request.body.a && xhr.setRequestHeader('Content-Type', request.body.a);
+		xhr.send(request.body.b);
+
+		return function() { xhr.c = true; xhr.abort(); };
+	});
+});
+
+
+// CONFIGURE
+
+function _Http_configureRequest(xhr, request)
+{
+	for (var headers = request.headers; headers.b; headers = headers.b) // WHILE_CONS
+	{
+		xhr.setRequestHeader(headers.a.a, headers.a.b);
+	}
+	xhr.timeout = request.timeout.a || 0;
+	xhr.responseType = request.expect.d;
+	xhr.withCredentials = request.allowCookiesFromOtherDomains;
+}
+
+
+// RESPONSES
+
+function _Http_toResponse(toBody, xhr)
+{
+	return A2(
+		200 <= xhr.status && xhr.status < 300 ? $elm$http$Http$GoodStatus_ : $elm$http$Http$BadStatus_,
+		_Http_toMetadata(xhr),
+		toBody(xhr.response)
+	);
+}
+
+
+// METADATA
+
+function _Http_toMetadata(xhr)
+{
+	return {
+		url: xhr.responseURL,
+		statusCode: xhr.status,
+		statusText: xhr.statusText,
+		headers: _Http_parseHeaders(xhr.getAllResponseHeaders())
+	};
+}
+
+
+// HEADERS
+
+function _Http_parseHeaders(rawHeaders)
+{
+	if (!rawHeaders)
+	{
+		return $elm$core$Dict$empty;
+	}
+
+	var headers = $elm$core$Dict$empty;
+	var headerPairs = rawHeaders.split('\r\n');
+	for (var i = headerPairs.length; i--; )
+	{
+		var headerPair = headerPairs[i];
+		var index = headerPair.indexOf(': ');
+		if (index > 0)
+		{
+			var key = headerPair.substring(0, index);
+			var value = headerPair.substring(index + 2);
+
+			headers = A3($elm$core$Dict$update, key, function(oldValue) {
+				return $elm$core$Maybe$Just($elm$core$Maybe$isJust(oldValue)
+					? value + ', ' + oldValue.a
+					: value
+				);
+			}, headers);
+		}
+	}
+	return headers;
+}
+
+
+// EXPECT
+
+var _Http_expect = F3(function(type, toBody, toValue)
+{
+	return {
+		$: 0,
+		d: type,
+		b: toBody,
+		a: toValue
+	};
+});
+
+var _Http_mapExpect = F2(function(func, expect)
+{
+	return {
+		$: 0,
+		d: expect.d,
+		b: expect.b,
+		a: function(x) { return func(expect.a(x)); }
+	};
+});
+
+function _Http_toDataView(arrayBuffer)
+{
+	return new DataView(arrayBuffer);
+}
+
+
+// BODY and PARTS
+
+var _Http_emptyBody = { $: 0 };
+var _Http_pair = F2(function(a, b) { return { $: 0, a: a, b: b }; });
+
+function _Http_toFormData(parts)
+{
+	for (var formData = new FormData(); parts.b; parts = parts.b) // WHILE_CONS
+	{
+		var part = parts.a;
+		formData.append(part.a, part.b);
+	}
+	return formData;
+}
+
+var _Http_bytesToBlob = F2(function(mime, bytes)
+{
+	return new Blob([bytes], { type: mime });
+});
+
+
+// PROGRESS
+
+function _Http_track(router, xhr, tracker)
+{
+	// TODO check out lengthComputable on loadstart event
+
+	xhr.upload.addEventListener('progress', function(event) {
+		if (xhr.c) { return; }
+		_Scheduler_rawSpawn(A2($elm$core$Platform$sendToSelf, router, _Utils_Tuple2(tracker, $elm$http$Http$Sending({
+			sent: event.loaded,
+			size: event.total
+		}))));
+	});
+	xhr.addEventListener('progress', function(event) {
+		if (xhr.c) { return; }
+		_Scheduler_rawSpawn(A2($elm$core$Platform$sendToSelf, router, _Utils_Tuple2(tracker, $elm$http$Http$Receiving({
+			received: event.loaded,
+			size: event.lengthComputable ? $elm$core$Maybe$Just(event.total) : $elm$core$Maybe$Nothing
+		}))));
+	});
+}
+
+function _Url_percentEncode(string)
+{
+	return encodeURIComponent(string);
+}
+
+function _Url_percentDecode(string)
+{
+	try
+	{
+		return $elm$core$Maybe$Just(decodeURIComponent(string));
+	}
+	catch (e)
+	{
+		return $elm$core$Maybe$Nothing;
+	}
+}
+
+// CREATE
+
+var _Regex_never = /.^/;
+
+var _Regex_fromStringWith = F2(function(options, string)
+{
+	var flags = 'g';
+	if (options.multiline) { flags += 'm'; }
+	if (options.caseInsensitive) { flags += 'i'; }
+
+	try
+	{
+		return $elm$core$Maybe$Just(new RegExp(string, flags));
+	}
+	catch(error)
+	{
+		return $elm$core$Maybe$Nothing;
+	}
+});
+
+
+// USE
+
+var _Regex_contains = F2(function(re, string)
+{
+	return string.match(re) !== null;
+});
+
+
+var _Regex_findAtMost = F3(function(n, re, str)
+{
+	var out = [];
+	var number = 0;
+	var string = str;
+	var lastIndex = re.lastIndex;
+	var prevLastIndex = -1;
+	var result;
+	while (number++ < n && (result = re.exec(string)))
+	{
+		if (prevLastIndex == re.lastIndex) break;
+		var i = result.length - 1;
+		var subs = new Array(i);
+		while (i > 0)
+		{
+			var submatch = result[i];
+			subs[--i] = submatch
+				? $elm$core$Maybe$Just(submatch)
+				: $elm$core$Maybe$Nothing;
+		}
+		out.push(A4($elm$regex$Regex$Match, result[0], result.index, number, _List_fromArray(subs)));
+		prevLastIndex = re.lastIndex;
+	}
+	re.lastIndex = lastIndex;
+	return _List_fromArray(out);
+});
+
+
+var _Regex_replaceAtMost = F4(function(n, re, replacer, string)
+{
+	var count = 0;
+	function jsReplacer(match)
+	{
+		if (count++ >= n)
+		{
+			return match;
+		}
+		var i = arguments.length - 3;
+		var submatches = new Array(i);
+		while (i > 0)
+		{
+			var submatch = arguments[i];
+			submatches[--i] = submatch
+				? $elm$core$Maybe$Just(submatch)
+				: $elm$core$Maybe$Nothing;
+		}
+		return replacer(A4($elm$regex$Regex$Match, match, arguments[arguments.length - 2], count, _List_fromArray(submatches)));
+	}
+	return string.replace(re, jsReplacer);
+});
+
+var _Regex_splitAtMost = F3(function(n, re, str)
+{
+	var string = str;
+	var out = [];
+	var start = re.lastIndex;
+	var restoreLastIndex = re.lastIndex;
+	while (n--)
+	{
+		var result = re.exec(string);
+		if (!result) break;
+		out.push(string.slice(start, result.index));
+		start = re.lastIndex;
+	}
+	out.push(string.slice(start));
+	re.lastIndex = restoreLastIndex;
+	return _List_fromArray(out);
+});
+
+var _Regex_infinity = Infinity;
 var $elm$core$Basics$EQ = {$: 'EQ'};
 var $elm$core$Basics$GT = {$: 'GT'};
 var $elm$core$Basics$LT = {$: 'LT'};
@@ -4847,14 +5140,22 @@ var $elm$virtual_dom$VirtualDom$toHandlerInt = function (handler) {
 };
 var $elm$virtual_dom$VirtualDom$text = _VirtualDom_text;
 var $elm$html$Html$text = $elm$virtual_dom$VirtualDom$text;
+var $author$project$Session$main = $elm$html$Html$text('');
+var $author$project$Route$main = $elm$html$Html$text('');
+var $author$project$Pages$Register$main = $elm$html$Html$text('');
+var $author$project$Pages$RecallPriority$main = $elm$html$Html$text('');
+var $author$project$Pages$NotFound$main = $elm$html$Html$text('');
+var $author$project$Pages$Logout$main = $elm$html$Html$text('');
 var $author$project$Pages$Login$main = $elm$html$Html$text('');
 var $author$project$Pages$Home$main = $elm$html$Html$text('');
+var $author$project$Pages$Blank$main = $elm$html$Html$text('');
 var $author$project$Page$main = $elm$html$Html$text('');
-var $author$project$Main$Login = {$: 'Login'};
-var $author$project$Main$Model = function (cur_page) {
-	return {cur_page: cur_page};
+var $author$project$Main$ChangedUrl = function (a) {
+	return {$: 'ChangedUrl', a: a};
 };
-var $author$project$Main$init = $author$project$Main$Model($author$project$Main$Login);
+var $author$project$Main$ClickedLink = function (a) {
+	return {$: 'ClickedLink', a: a};
+};
 var $elm$browser$Browser$External = function (a) {
 	return {$: 'External', a: a};
 };
@@ -5153,36 +5454,2229 @@ var $elm$core$Task$perform = F2(
 			$elm$core$Task$Perform(
 				A2($elm$core$Task$map, toMessage, task)));
 	});
+var $elm$browser$Browser$application = _Browser_application;
+var $author$project$Main$Redirect = function (a) {
+	return {$: 'Redirect', a: a};
+};
+var $author$project$Main$GotHomeMsg = function (a) {
+	return {$: 'GotHomeMsg', a: a};
+};
+var $author$project$Main$GotLoginMsg = function (a) {
+	return {$: 'GotLoginMsg', a: a};
+};
+var $author$project$Main$GotRecallPriorityMsg = function (a) {
+	return {$: 'GotRecallPriorityMsg', a: a};
+};
+var $author$project$Main$GotRegisterMsg = function (a) {
+	return {$: 'GotRegisterMsg', a: a};
+};
+var $author$project$Main$Home = function (a) {
+	return {$: 'Home', a: a};
+};
+var $author$project$Route$Home = {$: 'Home'};
+var $author$project$Main$Login = function (a) {
+	return {$: 'Login', a: a};
+};
+var $author$project$Main$NotFound = function (a) {
+	return {$: 'NotFound', a: a};
+};
+var $author$project$Main$RecallPriority = function (a) {
+	return {$: 'RecallPriority', a: a};
+};
+var $author$project$Main$Register = function (a) {
+	return {$: 'Register', a: a};
+};
+var $author$project$Pages$Home$Model = function (session) {
+	return {session: session};
+};
 var $elm$core$Platform$Cmd$batch = _Platform_batch;
 var $elm$core$Platform$Cmd$none = $elm$core$Platform$Cmd$batch(_List_Nil);
-var $elm$core$Platform$Sub$batch = _Platform_batch;
-var $elm$core$Platform$Sub$none = $elm$core$Platform$Sub$batch(_List_Nil);
-var $elm$browser$Browser$sandbox = function (impl) {
-	return _Browser_element(
+var $author$project$Pages$Home$init = function (session) {
+	return _Utils_Tuple2(
+		$author$project$Pages$Home$Model(session),
+		$elm$core$Platform$Cmd$none);
+};
+var $author$project$Pages$Login$init = function (session) {
+	return _Utils_Tuple2(
 		{
-			init: function (_v0) {
-				return _Utils_Tuple2(impl.init, $elm$core$Platform$Cmd$none);
+			error: '',
+			form: {email: '', password: ''},
+			session: session
+		},
+		$elm$core$Platform$Cmd$none);
+};
+var $author$project$Pages$RecallPriority$Model = F4(
+	function (session, recallList, detailsModal, searchForm) {
+		return {detailsModal: detailsModal, recallList: recallList, searchForm: searchForm, session: session};
+	});
+var $author$project$Pages$RecallPriority$UpdateRecallList = function (a) {
+	return {$: 'UpdateRecallList', a: a};
+};
+var $author$project$Session$navKey = function (session) {
+	switch (session.$) {
+		case 'Anonymous':
+			var key = session.a;
+			return key;
+		case 'Manager':
+			var key = session.a;
+			return key;
+		case 'Investigator':
+			var key = session.a;
+			return key;
+		default:
+			var key = session.a;
+			return key;
+	}
+};
+var $elm$browser$Browser$Navigation$replaceUrl = _Browser_replaceUrl;
+var $author$project$Route$routeToPieces = function (route) {
+	switch (route.$) {
+		case 'Home':
+			return _List_fromArray(
+				['home']);
+		case 'Register':
+			return _List_fromArray(
+				['register']);
+		case 'Login':
+			return _List_fromArray(
+				['login']);
+		case 'Logout':
+			return _List_fromArray(
+				['logout']);
+		default:
+			return _List_fromArray(
+				['recall-priority']);
+	}
+};
+var $author$project$Route$routeToString = function (route) {
+	return '/' + A2(
+		$elm$core$String$join,
+		'/',
+		$author$project$Route$routeToPieces(route));
+};
+var $author$project$Route$replaceUrl = F2(
+	function (key, route) {
+		return A2(
+			$elm$browser$Browser$Navigation$replaceUrl,
+			key,
+			$author$project$Route$routeToString(route));
+	});
+var $elm$json$Json$Decode$decodeString = _Json_runOnString;
+var $elm$http$Http$BadStatus_ = F2(
+	function (a, b) {
+		return {$: 'BadStatus_', a: a, b: b};
+	});
+var $elm$http$Http$BadUrl_ = function (a) {
+	return {$: 'BadUrl_', a: a};
+};
+var $elm$http$Http$GoodStatus_ = F2(
+	function (a, b) {
+		return {$: 'GoodStatus_', a: a, b: b};
+	});
+var $elm$http$Http$NetworkError_ = {$: 'NetworkError_'};
+var $elm$http$Http$Receiving = function (a) {
+	return {$: 'Receiving', a: a};
+};
+var $elm$http$Http$Sending = function (a) {
+	return {$: 'Sending', a: a};
+};
+var $elm$http$Http$Timeout_ = {$: 'Timeout_'};
+var $elm$core$Dict$RBEmpty_elm_builtin = {$: 'RBEmpty_elm_builtin'};
+var $elm$core$Dict$empty = $elm$core$Dict$RBEmpty_elm_builtin;
+var $elm$core$Maybe$isJust = function (maybe) {
+	if (maybe.$ === 'Just') {
+		return true;
+	} else {
+		return false;
+	}
+};
+var $elm$core$Platform$sendToSelf = _Platform_sendToSelf;
+var $elm$core$Basics$compare = _Utils_compare;
+var $elm$core$Dict$get = F2(
+	function (targetKey, dict) {
+		get:
+		while (true) {
+			if (dict.$ === 'RBEmpty_elm_builtin') {
+				return $elm$core$Maybe$Nothing;
+			} else {
+				var key = dict.b;
+				var value = dict.c;
+				var left = dict.d;
+				var right = dict.e;
+				var _v1 = A2($elm$core$Basics$compare, targetKey, key);
+				switch (_v1.$) {
+					case 'LT':
+						var $temp$targetKey = targetKey,
+							$temp$dict = left;
+						targetKey = $temp$targetKey;
+						dict = $temp$dict;
+						continue get;
+					case 'EQ':
+						return $elm$core$Maybe$Just(value);
+					default:
+						var $temp$targetKey = targetKey,
+							$temp$dict = right;
+						targetKey = $temp$targetKey;
+						dict = $temp$dict;
+						continue get;
+				}
+			}
+		}
+	});
+var $elm$core$Dict$Black = {$: 'Black'};
+var $elm$core$Dict$RBNode_elm_builtin = F5(
+	function (a, b, c, d, e) {
+		return {$: 'RBNode_elm_builtin', a: a, b: b, c: c, d: d, e: e};
+	});
+var $elm$core$Dict$Red = {$: 'Red'};
+var $elm$core$Dict$balance = F5(
+	function (color, key, value, left, right) {
+		if ((right.$ === 'RBNode_elm_builtin') && (right.a.$ === 'Red')) {
+			var _v1 = right.a;
+			var rK = right.b;
+			var rV = right.c;
+			var rLeft = right.d;
+			var rRight = right.e;
+			if ((left.$ === 'RBNode_elm_builtin') && (left.a.$ === 'Red')) {
+				var _v3 = left.a;
+				var lK = left.b;
+				var lV = left.c;
+				var lLeft = left.d;
+				var lRight = left.e;
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Red,
+					key,
+					value,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, lK, lV, lLeft, lRight),
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, rK, rV, rLeft, rRight));
+			} else {
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					color,
+					rK,
+					rV,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, key, value, left, rLeft),
+					rRight);
+			}
+		} else {
+			if ((((left.$ === 'RBNode_elm_builtin') && (left.a.$ === 'Red')) && (left.d.$ === 'RBNode_elm_builtin')) && (left.d.a.$ === 'Red')) {
+				var _v5 = left.a;
+				var lK = left.b;
+				var lV = left.c;
+				var _v6 = left.d;
+				var _v7 = _v6.a;
+				var llK = _v6.b;
+				var llV = _v6.c;
+				var llLeft = _v6.d;
+				var llRight = _v6.e;
+				var lRight = left.e;
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Red,
+					lK,
+					lV,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, llK, llV, llLeft, llRight),
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, key, value, lRight, right));
+			} else {
+				return A5($elm$core$Dict$RBNode_elm_builtin, color, key, value, left, right);
+			}
+		}
+	});
+var $elm$core$Dict$insertHelp = F3(
+	function (key, value, dict) {
+		if (dict.$ === 'RBEmpty_elm_builtin') {
+			return A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, key, value, $elm$core$Dict$RBEmpty_elm_builtin, $elm$core$Dict$RBEmpty_elm_builtin);
+		} else {
+			var nColor = dict.a;
+			var nKey = dict.b;
+			var nValue = dict.c;
+			var nLeft = dict.d;
+			var nRight = dict.e;
+			var _v1 = A2($elm$core$Basics$compare, key, nKey);
+			switch (_v1.$) {
+				case 'LT':
+					return A5(
+						$elm$core$Dict$balance,
+						nColor,
+						nKey,
+						nValue,
+						A3($elm$core$Dict$insertHelp, key, value, nLeft),
+						nRight);
+				case 'EQ':
+					return A5($elm$core$Dict$RBNode_elm_builtin, nColor, nKey, value, nLeft, nRight);
+				default:
+					return A5(
+						$elm$core$Dict$balance,
+						nColor,
+						nKey,
+						nValue,
+						nLeft,
+						A3($elm$core$Dict$insertHelp, key, value, nRight));
+			}
+		}
+	});
+var $elm$core$Dict$insert = F3(
+	function (key, value, dict) {
+		var _v0 = A3($elm$core$Dict$insertHelp, key, value, dict);
+		if ((_v0.$ === 'RBNode_elm_builtin') && (_v0.a.$ === 'Red')) {
+			var _v1 = _v0.a;
+			var k = _v0.b;
+			var v = _v0.c;
+			var l = _v0.d;
+			var r = _v0.e;
+			return A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, k, v, l, r);
+		} else {
+			var x = _v0;
+			return x;
+		}
+	});
+var $elm$core$Dict$getMin = function (dict) {
+	getMin:
+	while (true) {
+		if ((dict.$ === 'RBNode_elm_builtin') && (dict.d.$ === 'RBNode_elm_builtin')) {
+			var left = dict.d;
+			var $temp$dict = left;
+			dict = $temp$dict;
+			continue getMin;
+		} else {
+			return dict;
+		}
+	}
+};
+var $elm$core$Dict$moveRedLeft = function (dict) {
+	if (((dict.$ === 'RBNode_elm_builtin') && (dict.d.$ === 'RBNode_elm_builtin')) && (dict.e.$ === 'RBNode_elm_builtin')) {
+		if ((dict.e.d.$ === 'RBNode_elm_builtin') && (dict.e.d.a.$ === 'Red')) {
+			var clr = dict.a;
+			var k = dict.b;
+			var v = dict.c;
+			var _v1 = dict.d;
+			var lClr = _v1.a;
+			var lK = _v1.b;
+			var lV = _v1.c;
+			var lLeft = _v1.d;
+			var lRight = _v1.e;
+			var _v2 = dict.e;
+			var rClr = _v2.a;
+			var rK = _v2.b;
+			var rV = _v2.c;
+			var rLeft = _v2.d;
+			var _v3 = rLeft.a;
+			var rlK = rLeft.b;
+			var rlV = rLeft.c;
+			var rlL = rLeft.d;
+			var rlR = rLeft.e;
+			var rRight = _v2.e;
+			return A5(
+				$elm$core$Dict$RBNode_elm_builtin,
+				$elm$core$Dict$Red,
+				rlK,
+				rlV,
+				A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Black,
+					k,
+					v,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, lK, lV, lLeft, lRight),
+					rlL),
+				A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, rK, rV, rlR, rRight));
+		} else {
+			var clr = dict.a;
+			var k = dict.b;
+			var v = dict.c;
+			var _v4 = dict.d;
+			var lClr = _v4.a;
+			var lK = _v4.b;
+			var lV = _v4.c;
+			var lLeft = _v4.d;
+			var lRight = _v4.e;
+			var _v5 = dict.e;
+			var rClr = _v5.a;
+			var rK = _v5.b;
+			var rV = _v5.c;
+			var rLeft = _v5.d;
+			var rRight = _v5.e;
+			if (clr.$ === 'Black') {
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Black,
+					k,
+					v,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, lK, lV, lLeft, lRight),
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, rK, rV, rLeft, rRight));
+			} else {
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Black,
+					k,
+					v,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, lK, lV, lLeft, lRight),
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, rK, rV, rLeft, rRight));
+			}
+		}
+	} else {
+		return dict;
+	}
+};
+var $elm$core$Dict$moveRedRight = function (dict) {
+	if (((dict.$ === 'RBNode_elm_builtin') && (dict.d.$ === 'RBNode_elm_builtin')) && (dict.e.$ === 'RBNode_elm_builtin')) {
+		if ((dict.d.d.$ === 'RBNode_elm_builtin') && (dict.d.d.a.$ === 'Red')) {
+			var clr = dict.a;
+			var k = dict.b;
+			var v = dict.c;
+			var _v1 = dict.d;
+			var lClr = _v1.a;
+			var lK = _v1.b;
+			var lV = _v1.c;
+			var _v2 = _v1.d;
+			var _v3 = _v2.a;
+			var llK = _v2.b;
+			var llV = _v2.c;
+			var llLeft = _v2.d;
+			var llRight = _v2.e;
+			var lRight = _v1.e;
+			var _v4 = dict.e;
+			var rClr = _v4.a;
+			var rK = _v4.b;
+			var rV = _v4.c;
+			var rLeft = _v4.d;
+			var rRight = _v4.e;
+			return A5(
+				$elm$core$Dict$RBNode_elm_builtin,
+				$elm$core$Dict$Red,
+				lK,
+				lV,
+				A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, llK, llV, llLeft, llRight),
+				A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Black,
+					k,
+					v,
+					lRight,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, rK, rV, rLeft, rRight)));
+		} else {
+			var clr = dict.a;
+			var k = dict.b;
+			var v = dict.c;
+			var _v5 = dict.d;
+			var lClr = _v5.a;
+			var lK = _v5.b;
+			var lV = _v5.c;
+			var lLeft = _v5.d;
+			var lRight = _v5.e;
+			var _v6 = dict.e;
+			var rClr = _v6.a;
+			var rK = _v6.b;
+			var rV = _v6.c;
+			var rLeft = _v6.d;
+			var rRight = _v6.e;
+			if (clr.$ === 'Black') {
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Black,
+					k,
+					v,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, lK, lV, lLeft, lRight),
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, rK, rV, rLeft, rRight));
+			} else {
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					$elm$core$Dict$Black,
+					k,
+					v,
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, lK, lV, lLeft, lRight),
+					A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, rK, rV, rLeft, rRight));
+			}
+		}
+	} else {
+		return dict;
+	}
+};
+var $elm$core$Dict$removeHelpPrepEQGT = F7(
+	function (targetKey, dict, color, key, value, left, right) {
+		if ((left.$ === 'RBNode_elm_builtin') && (left.a.$ === 'Red')) {
+			var _v1 = left.a;
+			var lK = left.b;
+			var lV = left.c;
+			var lLeft = left.d;
+			var lRight = left.e;
+			return A5(
+				$elm$core$Dict$RBNode_elm_builtin,
+				color,
+				lK,
+				lV,
+				lLeft,
+				A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Red, key, value, lRight, right));
+		} else {
+			_v2$2:
+			while (true) {
+				if ((right.$ === 'RBNode_elm_builtin') && (right.a.$ === 'Black')) {
+					if (right.d.$ === 'RBNode_elm_builtin') {
+						if (right.d.a.$ === 'Black') {
+							var _v3 = right.a;
+							var _v4 = right.d;
+							var _v5 = _v4.a;
+							return $elm$core$Dict$moveRedRight(dict);
+						} else {
+							break _v2$2;
+						}
+					} else {
+						var _v6 = right.a;
+						var _v7 = right.d;
+						return $elm$core$Dict$moveRedRight(dict);
+					}
+				} else {
+					break _v2$2;
+				}
+			}
+			return dict;
+		}
+	});
+var $elm$core$Dict$removeMin = function (dict) {
+	if ((dict.$ === 'RBNode_elm_builtin') && (dict.d.$ === 'RBNode_elm_builtin')) {
+		var color = dict.a;
+		var key = dict.b;
+		var value = dict.c;
+		var left = dict.d;
+		var lColor = left.a;
+		var lLeft = left.d;
+		var right = dict.e;
+		if (lColor.$ === 'Black') {
+			if ((lLeft.$ === 'RBNode_elm_builtin') && (lLeft.a.$ === 'Red')) {
+				var _v3 = lLeft.a;
+				return A5(
+					$elm$core$Dict$RBNode_elm_builtin,
+					color,
+					key,
+					value,
+					$elm$core$Dict$removeMin(left),
+					right);
+			} else {
+				var _v4 = $elm$core$Dict$moveRedLeft(dict);
+				if (_v4.$ === 'RBNode_elm_builtin') {
+					var nColor = _v4.a;
+					var nKey = _v4.b;
+					var nValue = _v4.c;
+					var nLeft = _v4.d;
+					var nRight = _v4.e;
+					return A5(
+						$elm$core$Dict$balance,
+						nColor,
+						nKey,
+						nValue,
+						$elm$core$Dict$removeMin(nLeft),
+						nRight);
+				} else {
+					return $elm$core$Dict$RBEmpty_elm_builtin;
+				}
+			}
+		} else {
+			return A5(
+				$elm$core$Dict$RBNode_elm_builtin,
+				color,
+				key,
+				value,
+				$elm$core$Dict$removeMin(left),
+				right);
+		}
+	} else {
+		return $elm$core$Dict$RBEmpty_elm_builtin;
+	}
+};
+var $elm$core$Dict$removeHelp = F2(
+	function (targetKey, dict) {
+		if (dict.$ === 'RBEmpty_elm_builtin') {
+			return $elm$core$Dict$RBEmpty_elm_builtin;
+		} else {
+			var color = dict.a;
+			var key = dict.b;
+			var value = dict.c;
+			var left = dict.d;
+			var right = dict.e;
+			if (_Utils_cmp(targetKey, key) < 0) {
+				if ((left.$ === 'RBNode_elm_builtin') && (left.a.$ === 'Black')) {
+					var _v4 = left.a;
+					var lLeft = left.d;
+					if ((lLeft.$ === 'RBNode_elm_builtin') && (lLeft.a.$ === 'Red')) {
+						var _v6 = lLeft.a;
+						return A5(
+							$elm$core$Dict$RBNode_elm_builtin,
+							color,
+							key,
+							value,
+							A2($elm$core$Dict$removeHelp, targetKey, left),
+							right);
+					} else {
+						var _v7 = $elm$core$Dict$moveRedLeft(dict);
+						if (_v7.$ === 'RBNode_elm_builtin') {
+							var nColor = _v7.a;
+							var nKey = _v7.b;
+							var nValue = _v7.c;
+							var nLeft = _v7.d;
+							var nRight = _v7.e;
+							return A5(
+								$elm$core$Dict$balance,
+								nColor,
+								nKey,
+								nValue,
+								A2($elm$core$Dict$removeHelp, targetKey, nLeft),
+								nRight);
+						} else {
+							return $elm$core$Dict$RBEmpty_elm_builtin;
+						}
+					}
+				} else {
+					return A5(
+						$elm$core$Dict$RBNode_elm_builtin,
+						color,
+						key,
+						value,
+						A2($elm$core$Dict$removeHelp, targetKey, left),
+						right);
+				}
+			} else {
+				return A2(
+					$elm$core$Dict$removeHelpEQGT,
+					targetKey,
+					A7($elm$core$Dict$removeHelpPrepEQGT, targetKey, dict, color, key, value, left, right));
+			}
+		}
+	});
+var $elm$core$Dict$removeHelpEQGT = F2(
+	function (targetKey, dict) {
+		if (dict.$ === 'RBNode_elm_builtin') {
+			var color = dict.a;
+			var key = dict.b;
+			var value = dict.c;
+			var left = dict.d;
+			var right = dict.e;
+			if (_Utils_eq(targetKey, key)) {
+				var _v1 = $elm$core$Dict$getMin(right);
+				if (_v1.$ === 'RBNode_elm_builtin') {
+					var minKey = _v1.b;
+					var minValue = _v1.c;
+					return A5(
+						$elm$core$Dict$balance,
+						color,
+						minKey,
+						minValue,
+						left,
+						$elm$core$Dict$removeMin(right));
+				} else {
+					return $elm$core$Dict$RBEmpty_elm_builtin;
+				}
+			} else {
+				return A5(
+					$elm$core$Dict$balance,
+					color,
+					key,
+					value,
+					left,
+					A2($elm$core$Dict$removeHelp, targetKey, right));
+			}
+		} else {
+			return $elm$core$Dict$RBEmpty_elm_builtin;
+		}
+	});
+var $elm$core$Dict$remove = F2(
+	function (key, dict) {
+		var _v0 = A2($elm$core$Dict$removeHelp, key, dict);
+		if ((_v0.$ === 'RBNode_elm_builtin') && (_v0.a.$ === 'Red')) {
+			var _v1 = _v0.a;
+			var k = _v0.b;
+			var v = _v0.c;
+			var l = _v0.d;
+			var r = _v0.e;
+			return A5($elm$core$Dict$RBNode_elm_builtin, $elm$core$Dict$Black, k, v, l, r);
+		} else {
+			var x = _v0;
+			return x;
+		}
+	});
+var $elm$core$Dict$update = F3(
+	function (targetKey, alter, dictionary) {
+		var _v0 = alter(
+			A2($elm$core$Dict$get, targetKey, dictionary));
+		if (_v0.$ === 'Just') {
+			var value = _v0.a;
+			return A3($elm$core$Dict$insert, targetKey, value, dictionary);
+		} else {
+			return A2($elm$core$Dict$remove, targetKey, dictionary);
+		}
+	});
+var $elm$core$Basics$composeR = F3(
+	function (f, g, x) {
+		return g(
+			f(x));
+	});
+var $elm$http$Http$expectStringResponse = F2(
+	function (toMsg, toResult) {
+		return A3(
+			_Http_expect,
+			'',
+			$elm$core$Basics$identity,
+			A2($elm$core$Basics$composeR, toResult, toMsg));
+	});
+var $elm$core$Result$mapError = F2(
+	function (f, result) {
+		if (result.$ === 'Ok') {
+			var v = result.a;
+			return $elm$core$Result$Ok(v);
+		} else {
+			var e = result.a;
+			return $elm$core$Result$Err(
+				f(e));
+		}
+	});
+var $elm$http$Http$BadBody = function (a) {
+	return {$: 'BadBody', a: a};
+};
+var $elm$http$Http$BadStatus = function (a) {
+	return {$: 'BadStatus', a: a};
+};
+var $elm$http$Http$BadUrl = function (a) {
+	return {$: 'BadUrl', a: a};
+};
+var $elm$http$Http$NetworkError = {$: 'NetworkError'};
+var $elm$http$Http$Timeout = {$: 'Timeout'};
+var $elm$http$Http$resolve = F2(
+	function (toResult, response) {
+		switch (response.$) {
+			case 'BadUrl_':
+				var url = response.a;
+				return $elm$core$Result$Err(
+					$elm$http$Http$BadUrl(url));
+			case 'Timeout_':
+				return $elm$core$Result$Err($elm$http$Http$Timeout);
+			case 'NetworkError_':
+				return $elm$core$Result$Err($elm$http$Http$NetworkError);
+			case 'BadStatus_':
+				var metadata = response.a;
+				return $elm$core$Result$Err(
+					$elm$http$Http$BadStatus(metadata.statusCode));
+			default:
+				var body = response.b;
+				return A2(
+					$elm$core$Result$mapError,
+					$elm$http$Http$BadBody,
+					toResult(body));
+		}
+	});
+var $elm$http$Http$expectJson = F2(
+	function (toMsg, decoder) {
+		return A2(
+			$elm$http$Http$expectStringResponse,
+			toMsg,
+			$elm$http$Http$resolve(
+				function (string) {
+					return A2(
+						$elm$core$Result$mapError,
+						$elm$json$Json$Decode$errorToString,
+						A2($elm$json$Json$Decode$decodeString, decoder, string));
+				}));
+	});
+var $elm$http$Http$jsonBody = function (value) {
+	return A2(
+		_Http_pair,
+		'application/json',
+		A2($elm$json$Json$Encode$encode, 0, value));
+};
+var $elm$json$Json$Decode$list = _Json_decodeList;
+var $author$project$Data$Recall$Recall = function (recallId) {
+	return function (recallNumber) {
+		return function (highPriority) {
+			return function (date) {
+				return function (recallHeading) {
+					return function (nameOfProduct) {
+						return function (description) {
+							return function (hazard) {
+								return function (remedyType) {
+									return function (units) {
+										return function (conjunectionWith) {
+											return function (incidents) {
+												return function (remedy) {
+													return function (soldAt) {
+														return function (distributors) {
+															return function (manufacturedIn) {
+																return {conjunectionWith: conjunectionWith, date: date, description: description, distributors: distributors, hazard: hazard, highPriority: highPriority, incidents: incidents, manufacturedIn: manufacturedIn, nameOfProduct: nameOfProduct, recallHeading: recallHeading, recallId: recallId, recallNumber: recallNumber, remedy: remedy, remedyType: remedyType, soldAt: soldAt, units: units};
+															};
+														};
+													};
+												};
+											};
+										};
+									};
+								};
+							};
+						};
+					};
+				};
+			};
+		};
+	};
+};
+var $elm$json$Json$Decode$bool = _Json_decodeBool;
+var $elm$json$Json$Decode$int = _Json_decodeInt;
+var $elm$json$Json$Decode$field = _Json_decodeField;
+var $author$project$Data$Recall$required = F3(
+	function (key, valDecoder, decoder) {
+		return A3(
+			$elm$json$Json$Decode$map2,
+			$elm$core$Basics$apR,
+			A2($elm$json$Json$Decode$field, key, valDecoder),
+			decoder);
+	});
+var $elm$json$Json$Decode$string = _Json_decodeString;
+var $author$project$Data$Recall$recallDecoder = A3(
+	$author$project$Data$Recall$required,
+	'manufactured_in',
+	$elm$json$Json$Decode$string,
+	A3(
+		$author$project$Data$Recall$required,
+		'distributors',
+		$elm$json$Json$Decode$string,
+		A3(
+			$author$project$Data$Recall$required,
+			'sold_at',
+			$elm$json$Json$Decode$string,
+			A3(
+				$author$project$Data$Recall$required,
+				'remedy',
+				$elm$json$Json$Decode$string,
+				A3(
+					$author$project$Data$Recall$required,
+					'incidents',
+					$elm$json$Json$Decode$string,
+					A3(
+						$author$project$Data$Recall$required,
+						'conjunction_with',
+						$elm$json$Json$Decode$string,
+						A3(
+							$author$project$Data$Recall$required,
+							'units',
+							$elm$json$Json$Decode$string,
+							A3(
+								$author$project$Data$Recall$required,
+								'remedy_type',
+								$elm$json$Json$Decode$string,
+								A3(
+									$author$project$Data$Recall$required,
+									'hazard',
+									$elm$json$Json$Decode$string,
+									A3(
+										$author$project$Data$Recall$required,
+										'description',
+										$elm$json$Json$Decode$string,
+										A3(
+											$author$project$Data$Recall$required,
+											'name_of_product',
+											$elm$json$Json$Decode$string,
+											A3(
+												$author$project$Data$Recall$required,
+												'recall_heading',
+												$elm$json$Json$Decode$string,
+												A3(
+													$author$project$Data$Recall$required,
+													'date',
+													$elm$json$Json$Decode$string,
+													A3(
+														$author$project$Data$Recall$required,
+														'high_priority',
+														$elm$json$Json$Decode$bool,
+														A3(
+															$author$project$Data$Recall$required,
+															'recall_number',
+															$elm$json$Json$Decode$string,
+															A3(
+																$author$project$Data$Recall$required,
+																'recall_id',
+																$elm$json$Json$Decode$int,
+																$elm$json$Json$Decode$succeed($author$project$Data$Recall$Recall)))))))))))))))));
+var $author$project$Data$Recall$recallListDecoder = $elm$json$Json$Decode$list($author$project$Data$Recall$recallDecoder);
+var $elm$http$Http$Request = function (a) {
+	return {$: 'Request', a: a};
+};
+var $elm$http$Http$State = F2(
+	function (reqs, subs) {
+		return {reqs: reqs, subs: subs};
+	});
+var $elm$http$Http$init = $elm$core$Task$succeed(
+	A2($elm$http$Http$State, $elm$core$Dict$empty, _List_Nil));
+var $elm$core$Process$kill = _Scheduler_kill;
+var $elm$core$Process$spawn = _Scheduler_spawn;
+var $elm$http$Http$updateReqs = F3(
+	function (router, cmds, reqs) {
+		updateReqs:
+		while (true) {
+			if (!cmds.b) {
+				return $elm$core$Task$succeed(reqs);
+			} else {
+				var cmd = cmds.a;
+				var otherCmds = cmds.b;
+				if (cmd.$ === 'Cancel') {
+					var tracker = cmd.a;
+					var _v2 = A2($elm$core$Dict$get, tracker, reqs);
+					if (_v2.$ === 'Nothing') {
+						var $temp$router = router,
+							$temp$cmds = otherCmds,
+							$temp$reqs = reqs;
+						router = $temp$router;
+						cmds = $temp$cmds;
+						reqs = $temp$reqs;
+						continue updateReqs;
+					} else {
+						var pid = _v2.a;
+						return A2(
+							$elm$core$Task$andThen,
+							function (_v3) {
+								return A3(
+									$elm$http$Http$updateReqs,
+									router,
+									otherCmds,
+									A2($elm$core$Dict$remove, tracker, reqs));
+							},
+							$elm$core$Process$kill(pid));
+					}
+				} else {
+					var req = cmd.a;
+					return A2(
+						$elm$core$Task$andThen,
+						function (pid) {
+							var _v4 = req.tracker;
+							if (_v4.$ === 'Nothing') {
+								return A3($elm$http$Http$updateReqs, router, otherCmds, reqs);
+							} else {
+								var tracker = _v4.a;
+								return A3(
+									$elm$http$Http$updateReqs,
+									router,
+									otherCmds,
+									A3($elm$core$Dict$insert, tracker, pid, reqs));
+							}
+						},
+						$elm$core$Process$spawn(
+							A3(
+								_Http_toTask,
+								router,
+								$elm$core$Platform$sendToApp(router),
+								req)));
+				}
+			}
+		}
+	});
+var $elm$http$Http$onEffects = F4(
+	function (router, cmds, subs, state) {
+		return A2(
+			$elm$core$Task$andThen,
+			function (reqs) {
+				return $elm$core$Task$succeed(
+					A2($elm$http$Http$State, reqs, subs));
 			},
-			subscriptions: function (_v1) {
-				return $elm$core$Platform$Sub$none;
+			A3($elm$http$Http$updateReqs, router, cmds, state.reqs));
+	});
+var $elm$core$List$maybeCons = F3(
+	function (f, mx, xs) {
+		var _v0 = f(mx);
+		if (_v0.$ === 'Just') {
+			var x = _v0.a;
+			return A2($elm$core$List$cons, x, xs);
+		} else {
+			return xs;
+		}
+	});
+var $elm$core$List$filterMap = F2(
+	function (f, xs) {
+		return A3(
+			$elm$core$List$foldr,
+			$elm$core$List$maybeCons(f),
+			_List_Nil,
+			xs);
+	});
+var $elm$http$Http$maybeSend = F4(
+	function (router, desiredTracker, progress, _v0) {
+		var actualTracker = _v0.a;
+		var toMsg = _v0.b;
+		return _Utils_eq(desiredTracker, actualTracker) ? $elm$core$Maybe$Just(
+			A2(
+				$elm$core$Platform$sendToApp,
+				router,
+				toMsg(progress))) : $elm$core$Maybe$Nothing;
+	});
+var $elm$http$Http$onSelfMsg = F3(
+	function (router, _v0, state) {
+		var tracker = _v0.a;
+		var progress = _v0.b;
+		return A2(
+			$elm$core$Task$andThen,
+			function (_v1) {
+				return $elm$core$Task$succeed(state);
 			},
-			update: F2(
-				function (msg, model) {
-					return _Utils_Tuple2(
-						A2(impl.update, msg, model),
-						$elm$core$Platform$Cmd$none);
+			$elm$core$Task$sequence(
+				A2(
+					$elm$core$List$filterMap,
+					A3($elm$http$Http$maybeSend, router, tracker, progress),
+					state.subs)));
+	});
+var $elm$http$Http$Cancel = function (a) {
+	return {$: 'Cancel', a: a};
+};
+var $elm$http$Http$cmdMap = F2(
+	function (func, cmd) {
+		if (cmd.$ === 'Cancel') {
+			var tracker = cmd.a;
+			return $elm$http$Http$Cancel(tracker);
+		} else {
+			var r = cmd.a;
+			return $elm$http$Http$Request(
+				{
+					allowCookiesFromOtherDomains: r.allowCookiesFromOtherDomains,
+					body: r.body,
+					expect: A2(_Http_mapExpect, func, r.expect),
+					headers: r.headers,
+					method: r.method,
+					timeout: r.timeout,
+					tracker: r.tracker,
+					url: r.url
+				});
+		}
+	});
+var $elm$http$Http$MySub = F2(
+	function (a, b) {
+		return {$: 'MySub', a: a, b: b};
+	});
+var $elm$http$Http$subMap = F2(
+	function (func, _v0) {
+		var tracker = _v0.a;
+		var toMsg = _v0.b;
+		return A2(
+			$elm$http$Http$MySub,
+			tracker,
+			A2($elm$core$Basics$composeR, toMsg, func));
+	});
+_Platform_effectManagers['Http'] = _Platform_createManager($elm$http$Http$init, $elm$http$Http$onEffects, $elm$http$Http$onSelfMsg, $elm$http$Http$cmdMap, $elm$http$Http$subMap);
+var $elm$http$Http$command = _Platform_leaf('Http');
+var $elm$http$Http$subscription = _Platform_leaf('Http');
+var $elm$http$Http$request = function (r) {
+	return $elm$http$Http$command(
+		$elm$http$Http$Request(
+			{allowCookiesFromOtherDomains: false, body: r.body, expect: r.expect, headers: r.headers, method: r.method, timeout: r.timeout, tracker: r.tracker, url: r.url}));
+};
+var $elm$json$Json$Encode$object = function (pairs) {
+	return _Json_wrap(
+		A3(
+			$elm$core$List$foldl,
+			F2(
+				function (_v0, obj) {
+					var k = _v0.a;
+					var v = _v0.b;
+					return A3(_Json_addField, k, v, obj);
 				}),
-			view: impl.view
+			_Json_emptyObject(_Utils_Tuple0),
+			pairs));
+};
+var $elm$json$Json$Encode$string = _Json_wrap;
+var $author$project$Data$Recall$searchEncoder = F4(
+	function (search, sortBy, limit, offset) {
+		return $elm$json$Json$Encode$object(
+			_List_fromArray(
+				[
+					_Utils_Tuple2(
+					'search',
+					$elm$json$Json$Encode$string(search)),
+					_Utils_Tuple2(
+					'sort_by',
+					$elm$json$Json$Encode$string(sortBy)),
+					_Utils_Tuple2(
+					'limit',
+					$elm$json$Json$Encode$string(limit)),
+					_Utils_Tuple2(
+					'offset',
+					$elm$json$Json$Encode$string(offset))
+				]));
+	});
+var $author$project$Data$Recall$searchRecalls = F2(
+	function (_v0, msg) {
+		var search = _v0.search;
+		var sortBy = _v0.sortBy;
+		var limit = _v0.limit;
+		var offset = _v0.offset;
+		return $elm$http$Http$request(
+			{
+				body: $elm$http$Http$jsonBody(
+					A4($author$project$Data$Recall$searchEncoder, search, sortBy, limit, offset)),
+				expect: A2($elm$http$Http$expectJson, msg, $author$project$Data$Recall$recallListDecoder),
+				headers: _List_Nil,
+				method: 'POST',
+				timeout: $elm$core$Maybe$Nothing,
+				tracker: $elm$core$Maybe$Nothing,
+				url: 'http://localhost:3033/recall/search'
+			});
+	});
+var $author$project$Pages$RecallPriority$init = function (session) {
+	var blankSearch = {limit: '10', offset: '', search: '', sortBy: ''};
+	if (session.$ === 'Manager') {
+		return _Utils_Tuple2(
+			A4($author$project$Pages$RecallPriority$Model, session, _List_Nil, $elm$core$Maybe$Nothing, blankSearch),
+			A2($author$project$Data$Recall$searchRecalls, blankSearch, $author$project$Pages$RecallPriority$UpdateRecallList));
+	} else {
+		return _Utils_Tuple2(
+			A4($author$project$Pages$RecallPriority$Model, session, _List_Nil, $elm$core$Maybe$Nothing, blankSearch),
+			A2(
+				$author$project$Route$replaceUrl,
+				$author$project$Session$navKey(session),
+				$author$project$Route$Home));
+	}
+};
+var $author$project$Pages$Register$init = function (session) {
+	return _Utils_Tuple2(
+		{
+			form: {email: '', firstName: '', password: '', passwordAgain: '', userType: ''},
+			formErrors: {email: $elm$core$Maybe$Nothing, firstName: $elm$core$Maybe$Nothing, password: $elm$core$Maybe$Nothing, passwordAgain: $elm$core$Maybe$Nothing, userType: $elm$core$Maybe$Nothing},
+			session: session
+		},
+		$elm$core$Platform$Cmd$none);
+};
+var $author$project$Session$Anonymous = function (a) {
+	return {$: 'Anonymous', a: a};
+};
+var $author$project$Session$logoutUser = function (curSession) {
+	return $author$project$Session$Anonymous(
+		$author$project$Session$navKey(curSession));
+};
+var $author$project$Pages$Home$toSession = function (model) {
+	return model.session;
+};
+var $author$project$Pages$Login$toSession = function (model) {
+	return model.session;
+};
+var $author$project$Pages$Logout$toSession = function (model) {
+	return model.session;
+};
+var $author$project$Pages$RecallPriority$toSession = function (model) {
+	return model.session;
+};
+var $author$project$Pages$Register$toSession = function (model) {
+	return model.session;
+};
+var $author$project$Main$toSession = function (mainModel) {
+	switch (mainModel.$) {
+		case 'Redirect':
+			var session = mainModel.a;
+			return session;
+		case 'NotFound':
+			var session = mainModel.a;
+			return session;
+		case 'Home':
+			var model = mainModel.a;
+			return $author$project$Pages$Home$toSession(model);
+		case 'Login':
+			var model = mainModel.a;
+			return $author$project$Pages$Login$toSession(model);
+		case 'Logout':
+			var model = mainModel.a;
+			return $author$project$Pages$Logout$toSession(model);
+		case 'Register':
+			var model = mainModel.a;
+			return $author$project$Pages$Register$toSession(model);
+		default:
+			var model = mainModel.a;
+			return $author$project$Pages$RecallPriority$toSession(model);
+	}
+};
+var $elm$core$Platform$Cmd$map = _Platform_map;
+var $author$project$Main$updateWith = F4(
+	function (toModel, toMsg, model, _v0) {
+		var subModel = _v0.a;
+		var subCmd = _v0.b;
+		return _Utils_Tuple2(
+			toModel(subModel),
+			A2($elm$core$Platform$Cmd$map, toMsg, subCmd));
+	});
+var $author$project$Main$changeRouteTo = F2(
+	function (maybeRoute, model) {
+		var session = $author$project$Main$toSession(model);
+		if (maybeRoute.$ === 'Nothing') {
+			return _Utils_Tuple2(
+				$author$project$Main$NotFound(session),
+				$elm$core$Platform$Cmd$none);
+		} else {
+			switch (maybeRoute.a.$) {
+				case 'Home':
+					var _v1 = maybeRoute.a;
+					return A4(
+						$author$project$Main$updateWith,
+						$author$project$Main$Home,
+						$author$project$Main$GotHomeMsg,
+						model,
+						$author$project$Pages$Home$init(session));
+				case 'Login':
+					var _v2 = maybeRoute.a;
+					return A4(
+						$author$project$Main$updateWith,
+						$author$project$Main$Login,
+						$author$project$Main$GotLoginMsg,
+						model,
+						$author$project$Pages$Login$init(session));
+				case 'Logout':
+					var _v3 = maybeRoute.a;
+					return _Utils_Tuple2(
+						$author$project$Main$Home(
+							{
+								session: $author$project$Session$logoutUser(session)
+							}),
+						A2(
+							$author$project$Route$replaceUrl,
+							$author$project$Session$navKey(session),
+							$author$project$Route$Home));
+				case 'Register':
+					var _v4 = maybeRoute.a;
+					return A4(
+						$author$project$Main$updateWith,
+						$author$project$Main$Register,
+						$author$project$Main$GotRegisterMsg,
+						model,
+						$author$project$Pages$Register$init(session));
+				default:
+					var _v5 = maybeRoute.a;
+					return A4(
+						$author$project$Main$updateWith,
+						$author$project$Main$RecallPriority,
+						$author$project$Main$GotRecallPriorityMsg,
+						model,
+						$author$project$Pages$RecallPriority$init(session));
+			}
+		}
+	});
+var $elm$url$Url$Parser$State = F5(
+	function (visited, unvisited, params, frag, value) {
+		return {frag: frag, params: params, unvisited: unvisited, value: value, visited: visited};
+	});
+var $elm$url$Url$Parser$getFirstMatch = function (states) {
+	getFirstMatch:
+	while (true) {
+		if (!states.b) {
+			return $elm$core$Maybe$Nothing;
+		} else {
+			var state = states.a;
+			var rest = states.b;
+			var _v1 = state.unvisited;
+			if (!_v1.b) {
+				return $elm$core$Maybe$Just(state.value);
+			} else {
+				if ((_v1.a === '') && (!_v1.b.b)) {
+					return $elm$core$Maybe$Just(state.value);
+				} else {
+					var $temp$states = rest;
+					states = $temp$states;
+					continue getFirstMatch;
+				}
+			}
+		}
+	}
+};
+var $elm$url$Url$Parser$removeFinalEmpty = function (segments) {
+	if (!segments.b) {
+		return _List_Nil;
+	} else {
+		if ((segments.a === '') && (!segments.b.b)) {
+			return _List_Nil;
+		} else {
+			var segment = segments.a;
+			var rest = segments.b;
+			return A2(
+				$elm$core$List$cons,
+				segment,
+				$elm$url$Url$Parser$removeFinalEmpty(rest));
+		}
+	}
+};
+var $elm$url$Url$Parser$preparePath = function (path) {
+	var _v0 = A2($elm$core$String$split, '/', path);
+	if (_v0.b && (_v0.a === '')) {
+		var segments = _v0.b;
+		return $elm$url$Url$Parser$removeFinalEmpty(segments);
+	} else {
+		var segments = _v0;
+		return $elm$url$Url$Parser$removeFinalEmpty(segments);
+	}
+};
+var $elm$url$Url$Parser$addToParametersHelp = F2(
+	function (value, maybeList) {
+		if (maybeList.$ === 'Nothing') {
+			return $elm$core$Maybe$Just(
+				_List_fromArray(
+					[value]));
+		} else {
+			var list = maybeList.a;
+			return $elm$core$Maybe$Just(
+				A2($elm$core$List$cons, value, list));
+		}
+	});
+var $elm$url$Url$percentDecode = _Url_percentDecode;
+var $elm$url$Url$Parser$addParam = F2(
+	function (segment, dict) {
+		var _v0 = A2($elm$core$String$split, '=', segment);
+		if ((_v0.b && _v0.b.b) && (!_v0.b.b.b)) {
+			var rawKey = _v0.a;
+			var _v1 = _v0.b;
+			var rawValue = _v1.a;
+			var _v2 = $elm$url$Url$percentDecode(rawKey);
+			if (_v2.$ === 'Nothing') {
+				return dict;
+			} else {
+				var key = _v2.a;
+				var _v3 = $elm$url$Url$percentDecode(rawValue);
+				if (_v3.$ === 'Nothing') {
+					return dict;
+				} else {
+					var value = _v3.a;
+					return A3(
+						$elm$core$Dict$update,
+						key,
+						$elm$url$Url$Parser$addToParametersHelp(value),
+						dict);
+				}
+			}
+		} else {
+			return dict;
+		}
+	});
+var $elm$url$Url$Parser$prepareQuery = function (maybeQuery) {
+	if (maybeQuery.$ === 'Nothing') {
+		return $elm$core$Dict$empty;
+	} else {
+		var qry = maybeQuery.a;
+		return A3(
+			$elm$core$List$foldr,
+			$elm$url$Url$Parser$addParam,
+			$elm$core$Dict$empty,
+			A2($elm$core$String$split, '&', qry));
+	}
+};
+var $elm$url$Url$Parser$parse = F2(
+	function (_v0, url) {
+		var parser = _v0.a;
+		return $elm$url$Url$Parser$getFirstMatch(
+			parser(
+				A5(
+					$elm$url$Url$Parser$State,
+					_List_Nil,
+					$elm$url$Url$Parser$preparePath(url.path),
+					$elm$url$Url$Parser$prepareQuery(url.query),
+					url.fragment,
+					$elm$core$Basics$identity)));
+	});
+var $author$project$Route$Login = {$: 'Login'};
+var $author$project$Route$Logout = {$: 'Logout'};
+var $author$project$Route$RecallPriority = {$: 'RecallPriority'};
+var $author$project$Route$Register = {$: 'Register'};
+var $elm$url$Url$Parser$Parser = function (a) {
+	return {$: 'Parser', a: a};
+};
+var $elm$url$Url$Parser$mapState = F2(
+	function (func, _v0) {
+		var visited = _v0.visited;
+		var unvisited = _v0.unvisited;
+		var params = _v0.params;
+		var frag = _v0.frag;
+		var value = _v0.value;
+		return A5(
+			$elm$url$Url$Parser$State,
+			visited,
+			unvisited,
+			params,
+			frag,
+			func(value));
+	});
+var $elm$url$Url$Parser$map = F2(
+	function (subValue, _v0) {
+		var parseArg = _v0.a;
+		return $elm$url$Url$Parser$Parser(
+			function (_v1) {
+				var visited = _v1.visited;
+				var unvisited = _v1.unvisited;
+				var params = _v1.params;
+				var frag = _v1.frag;
+				var value = _v1.value;
+				return A2(
+					$elm$core$List$map,
+					$elm$url$Url$Parser$mapState(value),
+					parseArg(
+						A5($elm$url$Url$Parser$State, visited, unvisited, params, frag, subValue)));
+			});
+	});
+var $elm$core$List$append = F2(
+	function (xs, ys) {
+		if (!ys.b) {
+			return xs;
+		} else {
+			return A3($elm$core$List$foldr, $elm$core$List$cons, ys, xs);
+		}
+	});
+var $elm$core$List$concat = function (lists) {
+	return A3($elm$core$List$foldr, $elm$core$List$append, _List_Nil, lists);
+};
+var $elm$core$List$concatMap = F2(
+	function (f, list) {
+		return $elm$core$List$concat(
+			A2($elm$core$List$map, f, list));
+	});
+var $elm$url$Url$Parser$oneOf = function (parsers) {
+	return $elm$url$Url$Parser$Parser(
+		function (state) {
+			return A2(
+				$elm$core$List$concatMap,
+				function (_v0) {
+					var parser = _v0.a;
+					return parser(state);
+				},
+				parsers);
 		});
 };
-var $author$project$Main$update = F2(
+var $elm$url$Url$Parser$s = function (str) {
+	return $elm$url$Url$Parser$Parser(
+		function (_v0) {
+			var visited = _v0.visited;
+			var unvisited = _v0.unvisited;
+			var params = _v0.params;
+			var frag = _v0.frag;
+			var value = _v0.value;
+			if (!unvisited.b) {
+				return _List_Nil;
+			} else {
+				var next = unvisited.a;
+				var rest = unvisited.b;
+				return _Utils_eq(next, str) ? _List_fromArray(
+					[
+						A5(
+						$elm$url$Url$Parser$State,
+						A2($elm$core$List$cons, next, visited),
+						rest,
+						params,
+						frag,
+						value)
+					]) : _List_Nil;
+			}
+		});
+};
+var $author$project$Route$parser = $elm$url$Url$Parser$oneOf(
+	_List_fromArray(
+		[
+			A2(
+			$elm$url$Url$Parser$map,
+			$author$project$Route$Home,
+			$elm$url$Url$Parser$s('home')),
+			A2(
+			$elm$url$Url$Parser$map,
+			$author$project$Route$Register,
+			$elm$url$Url$Parser$s('register')),
+			A2(
+			$elm$url$Url$Parser$map,
+			$author$project$Route$Login,
+			$elm$url$Url$Parser$s('login')),
+			A2(
+			$elm$url$Url$Parser$map,
+			$author$project$Route$Logout,
+			$elm$url$Url$Parser$s('logout')),
+			A2(
+			$elm$url$Url$Parser$map,
+			$author$project$Route$RecallPriority,
+			$elm$url$Url$Parser$s('recall-priority'))
+		]));
+var $author$project$Route$fromUrl = function (url) {
+	return A2(
+		$elm$url$Url$Parser$parse,
+		$author$project$Route$parser,
+		_Utils_update(
+			url,
+			{fragment: $elm$core$Maybe$Nothing, path: url.path}));
+};
+var $author$project$Session$Investigator = F2(
+	function (a, b) {
+		return {$: 'Investigator', a: a, b: b};
+	});
+var $author$project$Session$Manager = F2(
+	function (a, b) {
+		return {$: 'Manager', a: a, b: b};
+	});
+var $author$project$Session$Vendor = F2(
+	function (a, b) {
+		return {$: 'Vendor', a: a, b: b};
+	});
+var $author$project$Session$init = F2(
+	function (key, maybeUser) {
+		if (maybeUser.$ === 'Just') {
+			var user = maybeUser.a;
+			var _v1 = user.userType;
+			switch (_v1) {
+				case 'Manager':
+					return A2($author$project$Session$Manager, key, user);
+				case 'Investigator':
+					return A2($author$project$Session$Investigator, key, user);
+				case 'Vendor':
+					return A2($author$project$Session$Vendor, key, user);
+				default:
+					return $author$project$Session$Anonymous(key);
+			}
+		} else {
+			return $author$project$Session$Anonymous(key);
+		}
+	});
+var $author$project$Main$init = F3(
+	function (maybeAuth, url, navKey) {
+		return A2(
+			$author$project$Main$changeRouteTo,
+			$author$project$Route$fromUrl(url),
+			$author$project$Main$Redirect(
+				A2($author$project$Session$init, navKey, $elm$core$Maybe$Nothing)));
+	});
+var $elm$core$Platform$Sub$batch = _Platform_batch;
+var $elm$core$Platform$Sub$none = $elm$core$Platform$Sub$batch(_List_Nil);
+var $author$project$Main$subscriptions = function (model) {
+	return $elm$core$Platform$Sub$none;
+};
+var $author$project$Main$Logout = function (a) {
+	return {$: 'Logout', a: a};
+};
+var $elm$browser$Browser$Navigation$load = _Browser_load;
+var $author$project$Session$loginUser = F2(
+	function (curSession, newUser) {
+		var _v0 = newUser.userType;
+		switch (_v0) {
+			case 'Manager':
+				return A2(
+					$author$project$Session$Manager,
+					$author$project$Session$navKey(curSession),
+					newUser);
+			case 'Investigator':
+				return A2(
+					$author$project$Session$Investigator,
+					$author$project$Session$navKey(curSession),
+					newUser);
+			case 'Vendor':
+				return A2(
+					$author$project$Session$Vendor,
+					$author$project$Session$navKey(curSession),
+					newUser);
+			default:
+				return $author$project$Session$Anonymous(
+					$author$project$Session$navKey(curSession));
+		}
+	});
+var $elm$browser$Browser$Navigation$pushUrl = _Browser_pushUrl;
+var $elm$url$Url$addPort = F2(
+	function (maybePort, starter) {
+		if (maybePort.$ === 'Nothing') {
+			return starter;
+		} else {
+			var port_ = maybePort.a;
+			return starter + (':' + $elm$core$String$fromInt(port_));
+		}
+	});
+var $elm$url$Url$addPrefixed = F3(
+	function (prefix, maybeSegment, starter) {
+		if (maybeSegment.$ === 'Nothing') {
+			return starter;
+		} else {
+			var segment = maybeSegment.a;
+			return _Utils_ap(
+				starter,
+				_Utils_ap(prefix, segment));
+		}
+	});
+var $elm$url$Url$toString = function (url) {
+	var http = function () {
+		var _v0 = url.protocol;
+		if (_v0.$ === 'Http') {
+			return 'http://';
+		} else {
+			return 'https://';
+		}
+	}();
+	return A3(
+		$elm$url$Url$addPrefixed,
+		'#',
+		url.fragment,
+		A3(
+			$elm$url$Url$addPrefixed,
+			'?',
+			url.query,
+			_Utils_ap(
+				A2(
+					$elm$url$Url$addPort,
+					url.port_,
+					_Utils_ap(http, url.host)),
+				url.path)));
+};
+var $author$project$Pages$Home$update = F2(
 	function (msg, model) {
-		var page = msg.a;
+		var session = msg.a;
 		return _Utils_update(
 			model,
-			{cur_page: page});
+			{session: session});
 	});
-var $elm$json$Json$Encode$string = _Json_wrap;
+var $author$project$Pages$Login$LoginCompleted = function (a) {
+	return {$: 'LoginCompleted', a: a};
+};
+var $author$project$Data$User$loginEncoder = F2(
+	function (email, password) {
+		return $elm$json$Json$Encode$object(
+			_List_fromArray(
+				[
+					_Utils_Tuple2(
+					'email',
+					$elm$json$Json$Encode$string(email)),
+					_Utils_Tuple2(
+					'password',
+					$elm$json$Json$Encode$string(password))
+				]));
+	});
+var $author$project$Data$User$User = F5(
+	function (userId, email, password, firstName, userType) {
+		return {email: email, firstName: firstName, password: password, userId: userId, userType: userType};
+	});
+var $elm$json$Json$Decode$map5 = _Json_map5;
+var $author$project$Data$User$userDecoder = A6(
+	$elm$json$Json$Decode$map5,
+	$author$project$Data$User$User,
+	A2($elm$json$Json$Decode$field, 'user_id', $elm$json$Json$Decode$int),
+	A2($elm$json$Json$Decode$field, 'email', $elm$json$Json$Decode$string),
+	A2($elm$json$Json$Decode$field, 'password', $elm$json$Json$Decode$string),
+	A2($elm$json$Json$Decode$field, 'first_name', $elm$json$Json$Decode$string),
+	A2($elm$json$Json$Decode$field, 'user_type', $elm$json$Json$Decode$string));
+var $author$project$Data$User$loginUser = F2(
+	function (_v0, msg) {
+		var email = _v0.email;
+		var password = _v0.password;
+		return $elm$http$Http$request(
+			{
+				body: $elm$http$Http$jsonBody(
+					A2($author$project$Data$User$loginEncoder, email, password)),
+				expect: A2($elm$http$Http$expectJson, msg, $author$project$Data$User$userDecoder),
+				headers: _List_Nil,
+				method: 'POST',
+				timeout: $elm$core$Maybe$Nothing,
+				tracker: $elm$core$Maybe$Nothing,
+				url: 'http://localhost:3033/user/login'
+			});
+	});
+var $author$project$Session$storeUser = _Platform_outgoingPort('storeUser', $elm$json$Json$Encode$string);
+var $elm$json$Json$Encode$int = _Json_wrap;
+var $author$project$Data$User$userEncoder = function (user) {
+	return $elm$json$Json$Encode$object(
+		_List_fromArray(
+			[
+				_Utils_Tuple2(
+				'user_id',
+				$elm$json$Json$Encode$int(user.userId)),
+				_Utils_Tuple2(
+				'email',
+				$elm$json$Json$Encode$string(user.email)),
+				_Utils_Tuple2(
+				'password',
+				$elm$json$Json$Encode$string(user.password)),
+				_Utils_Tuple2(
+				'first_name',
+				$elm$json$Json$Encode$string(user.firstName)),
+				_Utils_Tuple2(
+				'user_type',
+				$elm$json$Json$Encode$string(user.userType))
+			]));
+};
+var $author$project$Pages$Login$saveUser = function (user) {
+	return $author$project$Session$storeUser(
+		A2(
+			$elm$json$Json$Encode$encode,
+			0,
+			$author$project$Data$User$userEncoder(user)));
+};
+var $author$project$Pages$Login$updateForm = F2(
+	function (transformForm, model) {
+		return _Utils_Tuple2(
+			_Utils_update(
+				model,
+				{
+					form: transformForm(model.form)
+				}),
+			$elm$core$Platform$Cmd$none);
+	});
+var $author$project$Pages$Login$update = F2(
+	function (msg, model) {
+		switch (msg.$) {
+			case 'GotSession':
+				var session = msg.a;
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{session: session}),
+					$elm$core$Platform$Cmd$none);
+			case 'UpdateEmail':
+				var email = msg.a;
+				return A2(
+					$author$project$Pages$Login$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{email: email});
+					},
+					model);
+			case 'UpdatePassword':
+				var password = msg.a;
+				return A2(
+					$author$project$Pages$Login$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{password: password});
+					},
+					model);
+			case 'SubmitLogin':
+				return _Utils_Tuple2(
+					model,
+					A2($author$project$Data$User$loginUser, model.form, $author$project$Pages$Login$LoginCompleted));
+			case 'CancelLogin':
+				return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
+			default:
+				var result = msg.a;
+				if (result.$ === 'Ok') {
+					var user = result.a;
+					return _Utils_Tuple2(
+						model,
+						$author$project$Pages$Login$saveUser(user));
+				} else {
+					var e = result.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{error: 'Invalid email or password'}),
+						$elm$core$Platform$Cmd$none);
+				}
+		}
+	});
+var $author$project$Pages$Logout$update = F2(
+	function (msg, model) {
+		var session = msg.a;
+		return _Utils_update(
+			model,
+			{session: session});
+	});
+var $author$project$Pages$RecallPriority$UpdateRecallPriority = function (a) {
+	return {$: 'UpdateRecallPriority', a: a};
+};
+var $elm$core$Basics$not = _Basics_not;
+var $author$project$Pages$RecallPriority$toggleHighPriority = function (recall) {
+	return _Utils_update(
+		recall,
+		{highPriority: !recall.highPriority});
+};
+var $elm$json$Json$Encode$bool = _Json_wrap;
+var $author$project$Data$Recall$recallEncoder = function (recall) {
+	return $elm$json$Json$Encode$object(
+		_List_fromArray(
+			[
+				_Utils_Tuple2(
+				'recall_id',
+				$elm$json$Json$Encode$int(recall.recallId)),
+				_Utils_Tuple2(
+				'recall_number',
+				$elm$json$Json$Encode$string(recall.recallNumber)),
+				_Utils_Tuple2(
+				'high_priority',
+				$elm$json$Json$Encode$bool(recall.highPriority)),
+				_Utils_Tuple2(
+				'date',
+				$elm$json$Json$Encode$string(recall.date)),
+				_Utils_Tuple2(
+				'recall_heading',
+				$elm$json$Json$Encode$string(recall.recallHeading)),
+				_Utils_Tuple2(
+				'name_of_product',
+				$elm$json$Json$Encode$string(recall.nameOfProduct)),
+				_Utils_Tuple2(
+				'description',
+				$elm$json$Json$Encode$string(recall.description)),
+				_Utils_Tuple2(
+				'hazard',
+				$elm$json$Json$Encode$string(recall.hazard)),
+				_Utils_Tuple2(
+				'remedy_type',
+				$elm$json$Json$Encode$string(recall.remedyType)),
+				_Utils_Tuple2(
+				'units',
+				$elm$json$Json$Encode$string(recall.units)),
+				_Utils_Tuple2(
+				'conjunction_with',
+				$elm$json$Json$Encode$string(recall.conjunectionWith)),
+				_Utils_Tuple2(
+				'incidents',
+				$elm$json$Json$Encode$string(recall.incidents)),
+				_Utils_Tuple2(
+				'remedy',
+				$elm$json$Json$Encode$string(recall.remedy)),
+				_Utils_Tuple2(
+				'sold_at',
+				$elm$json$Json$Encode$string(recall.soldAt)),
+				_Utils_Tuple2(
+				'distributors',
+				$elm$json$Json$Encode$string(recall.distributors)),
+				_Utils_Tuple2(
+				'manufactured_in',
+				$elm$json$Json$Encode$string(recall.manufacturedIn))
+			]));
+};
+var $author$project$Data$Recall$updateRecall = F2(
+	function (recall, msg) {
+		return $elm$http$Http$request(
+			{
+				body: $elm$http$Http$jsonBody(
+					$author$project$Data$Recall$recallEncoder(recall)),
+				expect: A2($elm$http$Http$expectJson, msg, $author$project$Data$Recall$recallDecoder),
+				headers: _List_Nil,
+				method: 'PUT',
+				timeout: $elm$core$Maybe$Nothing,
+				tracker: $elm$core$Maybe$Nothing,
+				url: 'http://localhost:3033/recall/' + $elm$core$String$fromInt(recall.recallId)
+			});
+	});
+var $author$project$Pages$RecallPriority$update = F2(
+	function (cmd, model) {
+		switch (cmd.$) {
+			case 'OpenDetails':
+				var recall = cmd.a;
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{
+							detailsModal: $elm$core$Maybe$Just(recall)
+						}),
+					$elm$core$Platform$Cmd$none);
+			case 'CloseDetails':
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{detailsModal: $elm$core$Maybe$Nothing}),
+					$elm$core$Platform$Cmd$none);
+			case 'ToggleHighPriority':
+				var updatedRecall = cmd.a;
+				return _Utils_Tuple2(
+					model,
+					A2(
+						$author$project$Data$Recall$updateRecall,
+						$author$project$Pages$RecallPriority$toggleHighPriority(updatedRecall),
+						$author$project$Pages$RecallPriority$UpdateRecallPriority));
+			case 'UpdateRecallList':
+				var result = cmd.a;
+				if (result.$ === 'Ok') {
+					var recallList = result.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{recallList: recallList}),
+						$elm$core$Platform$Cmd$none);
+				} else {
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{recallList: _List_Nil}),
+						$elm$core$Platform$Cmd$none);
+				}
+			case 'UpdateRecallPriority':
+				var result = cmd.a;
+				if (result.$ === 'Ok') {
+					var recall = result.a;
+					var updateRecalls = function (oldRecall) {
+						return _Utils_eq(oldRecall.recallId, recall.recallId) ? recall : oldRecall;
+					};
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								recallList: A2($elm$core$List$map, updateRecalls, model.recallList)
+							}),
+						$elm$core$Platform$Cmd$none);
+				} else {
+					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
+				}
+			case 'SetSearch':
+				var search = cmd.a;
+				var oldSearchForm = model.searchForm;
+				var updateSearchForm = function (newSearch) {
+					return _Utils_update(
+						oldSearchForm,
+						{search: newSearch});
+				};
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{
+							searchForm: updateSearchForm(search)
+						}),
+					$elm$core$Platform$Cmd$none);
+			case 'SetSortBy':
+				var sortBy = cmd.a;
+				var oldSearchForm = model.searchForm;
+				var updateSearchForm = function (newSortBy) {
+					return _Utils_update(
+						oldSearchForm,
+						{sortBy: newSortBy});
+				};
+				var updatedModel = _Utils_update(
+					model,
+					{
+						searchForm: updateSearchForm(sortBy)
+					});
+				return _Utils_Tuple2(
+					updatedModel,
+					A2(
+						$author$project$Data$Recall$searchRecalls,
+						updateSearchForm(sortBy),
+						$author$project$Pages$RecallPriority$UpdateRecallList));
+			default:
+				return _Utils_Tuple2(
+					model,
+					A2($author$project$Data$Recall$searchRecalls, model.searchForm, $author$project$Pages$RecallPriority$UpdateRecallList));
+		}
+	});
+var $author$project$Pages$Register$RegistrationCompleted = function (a) {
+	return {$: 'RegistrationCompleted', a: a};
+};
+var $author$project$Pages$Register$convertToUser = function (form) {
+	return A5($author$project$Data$User$User, 0, form.email, form.password, form.firstName, form.userType);
+};
+var $author$project$Data$User$createUser = F2(
+	function (user, msg) {
+		return $elm$http$Http$request(
+			{
+				body: $elm$http$Http$jsonBody(
+					$author$project$Data$User$userEncoder(user)),
+				expect: A2($elm$http$Http$expectJson, msg, $author$project$Data$User$userDecoder),
+				headers: _List_Nil,
+				method: 'POST',
+				timeout: $elm$core$Maybe$Nothing,
+				tracker: $elm$core$Maybe$Nothing,
+				url: 'http://localhost:3033/user'
+			});
+	});
+var $elm$core$Maybe$withDefault = F2(
+	function (_default, maybe) {
+		if (maybe.$ === 'Just') {
+			var value = maybe.a;
+			return value;
+		} else {
+			return _default;
+		}
+	});
+var $author$project$Pages$Register$isValid = function (formErrors) {
+	return ((A2($elm$core$Maybe$withDefault, '', formErrors.email) === '') && ((A2($elm$core$Maybe$withDefault, '', formErrors.firstName) === '') && ((A2($elm$core$Maybe$withDefault, '', formErrors.password) === '') && ((A2($elm$core$Maybe$withDefault, '', formErrors.passwordAgain) === '') && (A2($elm$core$Maybe$withDefault, '', formErrors.userType) === ''))))) ? true : false;
+};
+var $author$project$Pages$Register$updateForm = F3(
+	function (transformForm, transformFormErrors, model) {
+		return _Utils_Tuple2(
+			_Utils_update(
+				model,
+				{
+					form: transformForm(model.form),
+					formErrors: transformFormErrors(model.formErrors)
+				}),
+			$elm$core$Platform$Cmd$none);
+	});
+var $elm$regex$Regex$Match = F4(
+	function (match, index, number, submatches) {
+		return {index: index, match: match, number: number, submatches: submatches};
+	});
+var $elm$regex$Regex$contains = _Regex_contains;
+var $elm$regex$Regex$fromStringWith = _Regex_fromStringWith;
+var $elm$regex$Regex$never = _Regex_never;
+var $author$project$Pages$Register$validateEmail = function (email) {
+	var regex = A2(
+		$elm$core$Maybe$withDefault,
+		$elm$regex$Regex$never,
+		A2(
+			$elm$regex$Regex$fromStringWith,
+			{caseInsensitive: true, multiline: false},
+			'^[a-zA-Z0-9.!#$%&\'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'));
+	return A2($elm$regex$Regex$contains, regex, email) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just('Invalid Email');
+};
+var $author$project$Pages$Register$validateFirstName = function (firstName) {
+	var regex = A2(
+		$elm$core$Maybe$withDefault,
+		$elm$regex$Regex$never,
+		A2(
+			$elm$regex$Regex$fromStringWith,
+			{caseInsensitive: true, multiline: false},
+			'^[a-zA-Z]+$'));
+	return A2($elm$regex$Regex$contains, regex, firstName) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just('Invalid First Name');
+};
+var $author$project$Pages$Register$validatePassword = function (password) {
+	var regex = A2(
+		$elm$core$Maybe$withDefault,
+		$elm$regex$Regex$never,
+		A2(
+			$elm$regex$Regex$fromStringWith,
+			{caseInsensitive: false, multiline: false},
+			'^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$'));
+	return A2($elm$regex$Regex$contains, regex, password) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just('Invalid Password');
+};
+var $author$project$Pages$Register$validatePasswordAgain = F2(
+	function (password, passwordAgain) {
+		return _Utils_eq(password, passwordAgain) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just('Passwords do not match');
+	});
+var $author$project$Pages$Register$validateUserType = function (userType) {
+	return ((userType === 'Manager') || ((userType === 'Investigator') || (userType === 'Vendor'))) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just('Invalid User Type');
+};
+var $author$project$Pages$Register$update = F2(
+	function (msg, model) {
+		switch (msg.$) {
+			case 'GotSession':
+				var session = msg.a;
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{session: session}),
+					$elm$core$Platform$Cmd$none);
+			case 'UpdateEmail':
+				var email = msg.a;
+				return A3(
+					$author$project$Pages$Register$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{email: email});
+					},
+					function (errorForm) {
+						return _Utils_update(
+							errorForm,
+							{
+								email: $author$project$Pages$Register$validateEmail(email)
+							});
+					},
+					model);
+			case 'UpdateFirstName':
+				var firstName = msg.a;
+				return A3(
+					$author$project$Pages$Register$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{firstName: firstName});
+					},
+					function (errorForm) {
+						return _Utils_update(
+							errorForm,
+							{
+								firstName: $author$project$Pages$Register$validateFirstName(firstName)
+							});
+					},
+					model);
+			case 'UpdatePassword':
+				var password = msg.a;
+				return A3(
+					$author$project$Pages$Register$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{password: password});
+					},
+					function (errorForm) {
+						return _Utils_update(
+							errorForm,
+							{
+								password: $author$project$Pages$Register$validatePassword(password)
+							});
+					},
+					model);
+			case 'UpdatePasswordAgain':
+				var passwordAgain = msg.a;
+				return A3(
+					$author$project$Pages$Register$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{passwordAgain: passwordAgain});
+					},
+					function (errorForm) {
+						return _Utils_update(
+							errorForm,
+							{
+								passwordAgain: A2($author$project$Pages$Register$validatePasswordAgain, model.form.password, passwordAgain)
+							});
+					},
+					model);
+			case 'UpdateUserType':
+				var userType = msg.a;
+				return A3(
+					$author$project$Pages$Register$updateForm,
+					function (form) {
+						return _Utils_update(
+							form,
+							{userType: userType});
+					},
+					function (errorForm) {
+						return _Utils_update(
+							errorForm,
+							{
+								userType: $author$project$Pages$Register$validateUserType(userType)
+							});
+					},
+					model);
+			case 'SubmitRegistration':
+				return $author$project$Pages$Register$isValid(model.formErrors) ? _Utils_Tuple2(
+					model,
+					A2(
+						$author$project$Data$User$createUser,
+						$author$project$Pages$Register$convertToUser(model.form),
+						$author$project$Pages$Register$RegistrationCompleted)) : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
+			case 'CancelRegistration':
+				return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
+			default:
+				var result = msg.a;
+				if (result.$ === 'Ok') {
+					return _Utils_Tuple2(
+						model,
+						A2(
+							$author$project$Route$replaceUrl,
+							$author$project$Session$navKey(model.session),
+							$author$project$Route$Login));
+				} else {
+					var e = result.a;
+					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
+				}
+		}
+	});
+var $author$project$Main$update = F2(
+	function (mainMsg, mainModel) {
+		var session = $author$project$Main$toSession(mainModel);
+		var _v0 = _Utils_Tuple2(mainMsg, mainModel);
+		_v0$7:
+		while (true) {
+			switch (_v0.a.$) {
+				case 'GotHomeMsg':
+					if (_v0.b.$ === 'Home') {
+						var msg = _v0.a.a;
+						var model = _v0.b.a;
+						return _Utils_Tuple2(
+							$author$project$Main$Home(
+								A2($author$project$Pages$Home$update, msg, model)),
+							$elm$core$Platform$Cmd$none);
+					} else {
+						break _v0$7;
+					}
+				case 'GotRegisterMsg':
+					if (_v0.b.$ === 'Register') {
+						var msg = _v0.a.a;
+						var model = _v0.b.a;
+						return A4(
+							$author$project$Main$updateWith,
+							$author$project$Main$Register,
+							$author$project$Main$GotRegisterMsg,
+							mainModel,
+							A2($author$project$Pages$Register$update, msg, model));
+					} else {
+						break _v0$7;
+					}
+				case 'GotLoginMsg':
+					if (_v0.b.$ === 'Login') {
+						var msg = _v0.a.a;
+						var model = _v0.b.a;
+						if (msg.$ === 'LoginCompleted') {
+							var result = msg.a;
+							if (result.$ === 'Ok') {
+								var user = result.a;
+								return _Utils_Tuple2(
+									$author$project$Main$Home(
+										{
+											session: A2($author$project$Session$loginUser, session, user)
+										}),
+									A2(
+										$author$project$Route$replaceUrl,
+										$author$project$Session$navKey(session),
+										$author$project$Route$Home));
+							} else {
+								return A4(
+									$author$project$Main$updateWith,
+									$author$project$Main$Login,
+									$author$project$Main$GotLoginMsg,
+									mainModel,
+									A2($author$project$Pages$Login$update, msg, model));
+							}
+						} else {
+							return A4(
+								$author$project$Main$updateWith,
+								$author$project$Main$Login,
+								$author$project$Main$GotLoginMsg,
+								mainModel,
+								A2($author$project$Pages$Login$update, msg, model));
+						}
+					} else {
+						break _v0$7;
+					}
+				case 'GotLogoutMsg':
+					if (_v0.b.$ === 'Logout') {
+						var msg = _v0.a.a;
+						var model = _v0.b.a;
+						return _Utils_Tuple2(
+							$author$project$Main$Logout(
+								A2($author$project$Pages$Logout$update, msg, model)),
+							$elm$core$Platform$Cmd$none);
+					} else {
+						break _v0$7;
+					}
+				case 'GotRecallPriorityMsg':
+					if (_v0.b.$ === 'RecallPriority') {
+						var msg = _v0.a.a;
+						var model = _v0.b.a;
+						return A4(
+							$author$project$Main$updateWith,
+							$author$project$Main$RecallPriority,
+							$author$project$Main$GotRecallPriorityMsg,
+							mainModel,
+							A2($author$project$Pages$RecallPriority$update, msg, model));
+					} else {
+						break _v0$7;
+					}
+				case 'ClickedLink':
+					var urlRequest = _v0.a.a;
+					if (urlRequest.$ === 'Internal') {
+						var url = urlRequest.a;
+						return _Utils_Tuple2(
+							mainModel,
+							A2(
+								$elm$browser$Browser$Navigation$pushUrl,
+								$author$project$Session$navKey(session),
+								$elm$url$Url$toString(url)));
+					} else {
+						var href = urlRequest.a;
+						return _Utils_Tuple2(
+							mainModel,
+							$elm$browser$Browser$Navigation$load(href));
+					}
+				case 'ChangedUrl':
+					var url = _v0.a.a;
+					return A2(
+						$author$project$Main$changeRouteTo,
+						$author$project$Route$fromUrl(url),
+						mainModel);
+				default:
+					break _v0$7;
+			}
+		}
+		return _Utils_Tuple2(mainModel, $elm$core$Platform$Cmd$none);
+	});
+var $author$project$Main$GotLogoutMsg = function (a) {
+	return {$: 'GotLogoutMsg', a: a};
+};
+var $author$project$Page$Home = {$: 'Home'};
+var $author$project$Page$Login = {$: 'Login'};
+var $author$project$Page$Logout = {$: 'Logout'};
+var $author$project$Page$Other = {$: 'Other'};
+var $author$project$Page$RecallPriority = {$: 'RecallPriority'};
+var $author$project$Page$Register = {$: 'Register'};
+var $elm$virtual_dom$VirtualDom$map = _VirtualDom_map;
+var $elm$html$Html$map = $elm$virtual_dom$VirtualDom$map;
+var $author$project$Pages$Blank$view = {
+	content: $elm$html$Html$text(''),
+	title: ''
+};
 var $elm$html$Html$Attributes$stringProperty = F2(
 	function (key, string) {
 		return A2(
@@ -5192,58 +7686,9 @@ var $elm$html$Html$Attributes$stringProperty = F2(
 	});
 var $elm$html$Html$Attributes$class = $elm$html$Html$Attributes$stringProperty('className');
 var $elm$html$Html$div = _VirtualDom_node('div');
-var $author$project$Pages$Home$view = A2(
-	$elm$html$Html$div,
-	_List_fromArray(
-		[
-			$elm$html$Html$Attributes$class('container')
-		]),
-	_List_fromArray(
-		[
-			A2(
-			$elm$html$Html$div,
-			_List_fromArray(
-				[
-					$elm$html$Html$Attributes$class('row')
-				]),
-			_List_fromArray(
-				[
-					A2(
-					$elm$html$Html$div,
-					_List_fromArray(
-						[
-							$elm$html$Html$Attributes$class('col-12')
-						]),
-					_List_fromArray(
-						[
-							$elm$html$Html$text('This is the homepage')
-						]))
-				]))
-		]));
-var $elm$html$Html$a = _VirtualDom_node('a');
-var $elm$html$Html$br = _VirtualDom_node('br');
-var $elm$html$Html$Attributes$for = $elm$html$Html$Attributes$stringProperty('htmlFor');
-var $elm$html$Html$form = _VirtualDom_node('form');
-var $elm$html$Html$h3 = _VirtualDom_node('h3');
-var $elm$html$Html$Attributes$href = function (url) {
-	return A2(
-		$elm$html$Html$Attributes$stringProperty,
-		'href',
-		_VirtualDom_noJavaScriptUri(url));
-};
-var $elm$html$Html$Attributes$id = $elm$html$Html$Attributes$stringProperty('id');
-var $elm$html$Html$input = _VirtualDom_node('input');
-var $elm$html$Html$label = _VirtualDom_node('label');
-var $elm$html$Html$Attributes$name = $elm$html$Html$Attributes$stringProperty('name');
-var $elm$html$Html$span = _VirtualDom_node('span');
-var $elm$html$Html$Attributes$type_ = $elm$html$Html$Attributes$stringProperty('type');
-var $elm$html$Html$Attributes$value = $elm$html$Html$Attributes$stringProperty('value');
-var $author$project$Pages$Login$view = A2(
-	$elm$html$Html$div,
-	_List_Nil,
-	_List_fromArray(
-		[
-			A2(
+var $author$project$Pages$Home$view = function (model) {
+	return {
+		content: A2(
 			$elm$html$Html$div,
 			_List_fromArray(
 				[
@@ -5255,8 +7700,7 @@ var $author$project$Pages$Login$view = A2(
 					$elm$html$Html$div,
 					_List_fromArray(
 						[
-							$elm$html$Html$Attributes$id('login-row'),
-							$elm$html$Html$Attributes$class('row justify-content-center align-items-center')
+							$elm$html$Html$Attributes$class('row')
 						]),
 					_List_fromArray(
 						[
@@ -5264,178 +7708,313 @@ var $author$project$Pages$Login$view = A2(
 							$elm$html$Html$div,
 							_List_fromArray(
 								[
-									$elm$html$Html$Attributes$id('login-column'),
-									$elm$html$Html$Attributes$class('col-md-6')
+									$elm$html$Html$Attributes$class('col-12')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('This is the home page')
+								]))
+						]))
+				])),
+		title: 'Home'
+	};
+};
+var $author$project$Pages$Login$CancelLogin = {$: 'CancelLogin'};
+var $author$project$Pages$Login$SubmitLogin = {$: 'SubmitLogin'};
+var $author$project$Pages$Login$UpdateEmail = function (a) {
+	return {$: 'UpdateEmail', a: a};
+};
+var $author$project$Pages$Login$UpdatePassword = function (a) {
+	return {$: 'UpdatePassword', a: a};
+};
+var $elm$html$Html$br = _VirtualDom_node('br');
+var $elm$html$Html$button = _VirtualDom_node('button');
+var $elm$html$Html$Attributes$for = $elm$html$Html$Attributes$stringProperty('htmlFor');
+var $elm$html$Html$h2 = _VirtualDom_node('h2');
+var $elm$html$Html$Attributes$id = $elm$html$Html$Attributes$stringProperty('id');
+var $elm$html$Html$input = _VirtualDom_node('input');
+var $elm$html$Html$label = _VirtualDom_node('label');
+var $elm$virtual_dom$VirtualDom$Normal = function (a) {
+	return {$: 'Normal', a: a};
+};
+var $elm$virtual_dom$VirtualDom$on = _VirtualDom_on;
+var $elm$html$Html$Events$on = F2(
+	function (event, decoder) {
+		return A2(
+			$elm$virtual_dom$VirtualDom$on,
+			event,
+			$elm$virtual_dom$VirtualDom$Normal(decoder));
+	});
+var $elm$html$Html$Events$onClick = function (msg) {
+	return A2(
+		$elm$html$Html$Events$on,
+		'click',
+		$elm$json$Json$Decode$succeed(msg));
+};
+var $elm$html$Html$Events$alwaysStop = function (x) {
+	return _Utils_Tuple2(x, true);
+};
+var $elm$virtual_dom$VirtualDom$MayStopPropagation = function (a) {
+	return {$: 'MayStopPropagation', a: a};
+};
+var $elm$html$Html$Events$stopPropagationOn = F2(
+	function (event, decoder) {
+		return A2(
+			$elm$virtual_dom$VirtualDom$on,
+			event,
+			$elm$virtual_dom$VirtualDom$MayStopPropagation(decoder));
+	});
+var $elm$json$Json$Decode$at = F2(
+	function (fields, decoder) {
+		return A3($elm$core$List$foldr, $elm$json$Json$Decode$field, decoder, fields);
+	});
+var $elm$html$Html$Events$targetValue = A2(
+	$elm$json$Json$Decode$at,
+	_List_fromArray(
+		['target', 'value']),
+	$elm$json$Json$Decode$string);
+var $elm$html$Html$Events$onInput = function (tagger) {
+	return A2(
+		$elm$html$Html$Events$stopPropagationOn,
+		'input',
+		A2(
+			$elm$json$Json$Decode$map,
+			$elm$html$Html$Events$alwaysStop,
+			A2($elm$json$Json$Decode$map, tagger, $elm$html$Html$Events$targetValue)));
+};
+var $elm$html$Html$p = _VirtualDom_node('p');
+var $elm$html$Html$Attributes$placeholder = $elm$html$Html$Attributes$stringProperty('placeholder');
+var $elm$html$Html$Attributes$type_ = $elm$html$Html$Attributes$stringProperty('type');
+var $elm$html$Html$Attributes$value = $elm$html$Html$Attributes$stringProperty('value');
+var $author$project$Pages$Login$view = function (model) {
+	return {
+		content: A2(
+			$elm$html$Html$div,
+			_List_fromArray(
+				[
+					$elm$html$Html$Attributes$class('')
+				]),
+			_List_fromArray(
+				[
+					A2($elm$html$Html$br, _List_Nil, _List_Nil),
+					A2($elm$html$Html$br, _List_Nil, _List_Nil),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('container')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('row justify-content-center')
 								]),
 							_List_fromArray(
 								[
 									A2(
+									$elm$html$Html$h2,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$class('col-xl-6 col-lg-10 col-sm-12')
+										]),
+									_List_fromArray(
+										[
+											$elm$html$Html$text('Login')
+										]))
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('row form-group justify-content-center')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$label,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$for('inputEmail'),
+											$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+										]),
+									_List_fromArray(
+										[
+											$elm$html$Html$text('Email')
+										])),
+									A2(
 									$elm$html$Html$div,
 									_List_fromArray(
 										[
-											$elm$html$Html$Attributes$id('login-box'),
-											$elm$html$Html$Attributes$class('col-md-12')
+											$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
 										]),
 									_List_fromArray(
 										[
 											A2(
-											$elm$html$Html$form,
+											$elm$html$Html$input,
 											_List_fromArray(
 												[
-													$elm$html$Html$Attributes$class('form')
+													$elm$html$Html$Attributes$type_('text'),
+													$elm$html$Html$Attributes$class('form-control'),
+													$elm$html$Html$Attributes$id('inputEmail'),
+													$elm$html$Html$Attributes$placeholder('email@example.com'),
+													$elm$html$Html$Attributes$value(model.form.email),
+													$elm$html$Html$Events$onInput($author$project$Pages$Login$UpdateEmail)
 												]),
+											_List_Nil)
+										]))
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('row form-group justify-content-center')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$label,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$for('inputPassword'),
+											$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+										]),
+									_List_fromArray(
+										[
+											$elm$html$Html$text('Password')
+										])),
+									A2(
+									$elm$html$Html$div,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
+										]),
+									_List_fromArray(
+										[
+											A2(
+											$elm$html$Html$input,
 											_List_fromArray(
 												[
-													A2(
-													$elm$html$Html$h3,
-													_List_fromArray(
-														[
-															$elm$html$Html$Attributes$class('text-center text-info')
-														]),
-													_List_fromArray(
-														[
-															$elm$html$Html$text('Login')
-														])),
-													A2(
-													$elm$html$Html$div,
-													_List_fromArray(
-														[
-															$elm$html$Html$Attributes$class('form-group')
-														]),
-													_List_fromArray(
-														[
-															A2(
-															$elm$html$Html$label,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$for('username'),
-																	$elm$html$Html$Attributes$class('text-info')
-																]),
-															_List_fromArray(
-																[
-																	$elm$html$Html$text('Username:')
-																])),
-															A2($elm$html$Html$br, _List_Nil, _List_Nil),
-															A2(
-															$elm$html$Html$input,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$type_('text'),
-																	$elm$html$Html$Attributes$name('username'),
-																	$elm$html$Html$Attributes$class('form-control')
-																]),
-															_List_Nil)
-														])),
-													A2(
-													$elm$html$Html$div,
-													_List_fromArray(
-														[
-															$elm$html$Html$Attributes$class('form-group')
-														]),
-													_List_fromArray(
-														[
-															A2(
-															$elm$html$Html$label,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$for('password'),
-																	$elm$html$Html$Attributes$class('text-info')
-																]),
-															_List_fromArray(
-																[
-																	$elm$html$Html$text('Password:')
-																])),
-															A2($elm$html$Html$br, _List_Nil, _List_Nil),
-															A2(
-															$elm$html$Html$input,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$type_('password'),
-																	$elm$html$Html$Attributes$name('password'),
-																	$elm$html$Html$Attributes$class('form-control')
-																]),
-															_List_Nil)
-														])),
-													A2(
-													$elm$html$Html$div,
-													_List_fromArray(
-														[
-															$elm$html$Html$Attributes$class('form-group')
-														]),
-													_List_fromArray(
-														[
-															A2(
-															$elm$html$Html$label,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$for('remember-me'),
-																	$elm$html$Html$Attributes$class('text-info')
-																]),
-															_List_fromArray(
-																[
-																	A2(
-																	$elm$html$Html$span,
-																	_List_Nil,
-																	_List_fromArray(
-																		[
-																			$elm$html$Html$text('Remember me')
-																		])),
-																	A2(
-																	$elm$html$Html$span,
-																	_List_Nil,
-																	_List_fromArray(
-																		[
-																			A2(
-																			$elm$html$Html$input,
-																			_List_fromArray(
-																				[
-																					$elm$html$Html$Attributes$name('remember-me'),
-																					$elm$html$Html$Attributes$type_('checkbox')
-																				]),
-																			_List_Nil)
-																		]))
-																])),
-															A2($elm$html$Html$br, _List_Nil, _List_Nil),
-															A2(
-															$elm$html$Html$input,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$type_('submit'),
-																	$elm$html$Html$Attributes$name('submit'),
-																	$elm$html$Html$Attributes$class('btn btn-info btn-md'),
-																	$elm$html$Html$Attributes$value('submit')
-																]),
-															_List_Nil)
-														])),
-													A2(
-													$elm$html$Html$div,
-													_List_fromArray(
-														[
-															$elm$html$Html$Attributes$class('text-right')
-														]),
-													_List_fromArray(
-														[
-															A2(
-															$elm$html$Html$a,
-															_List_fromArray(
-																[
-																	$elm$html$Html$Attributes$href('#'),
-																	$elm$html$Html$Attributes$class('text-info')
-																]),
-															_List_fromArray(
-																[
-																	$elm$html$Html$text('Register here')
-																]))
-														]))
-												]))
+													$elm$html$Html$Attributes$type_('password'),
+													$elm$html$Html$Attributes$class('form-control'),
+													$elm$html$Html$Attributes$id('inputPassword'),
+													$elm$html$Html$Attributes$placeholder('Password'),
+													$elm$html$Html$Attributes$value(model.form.password),
+													$elm$html$Html$Events$onInput($author$project$Pages$Login$UpdatePassword)
+												]),
+											_List_Nil)
+										]))
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('row form-group justify-content-center')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$p,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$class('text-danger justify-text')
+										]),
+									_List_fromArray(
+										[
+											$elm$html$Html$text(model.error)
+										]))
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('row form-group justify-content-center')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$button,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$type_('button'),
+											$elm$html$Html$Attributes$class('btn btn-primary mx-5'),
+											$elm$html$Html$Events$onClick($author$project$Pages$Login$SubmitLogin)
+										]),
+									_List_fromArray(
+										[
+											$elm$html$Html$text('Login')
+										])),
+									A2(
+									$elm$html$Html$button,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$type_('button'),
+											$elm$html$Html$Attributes$class('btn btn-danger mx-5'),
+											$elm$html$Html$Events$onClick($author$project$Pages$Login$CancelLogin)
+										]),
+									_List_fromArray(
+										[
+											$elm$html$Html$text('Cancel')
 										]))
 								]))
 						]))
-				]))
-		]));
-var $elm$html$Html$footer = _VirtualDom_node('footer');
-var $author$project$Page$viewFooter = A2($elm$html$Html$footer, _List_Nil, _List_Nil);
-var $elm$html$Html$Attributes$alt = $elm$html$Html$Attributes$stringProperty('alt');
+				])),
+		title: 'Login'
+	};
+};
+var $author$project$Pages$Logout$view = function (model) {
+	return {
+		content: $elm$html$Html$text(''),
+		title: 'Logout'
+	};
+};
+var $elm$html$Html$h1 = _VirtualDom_node('h1');
+var $elm$html$Html$main_ = _VirtualDom_node('main');
+var $elm$core$Basics$negate = function (n) {
+	return -n;
+};
+var $elm$virtual_dom$VirtualDom$style = _VirtualDom_style;
+var $elm$html$Html$Attributes$style = $elm$virtual_dom$VirtualDom$style;
+var $elm$html$Html$Attributes$tabindex = function (n) {
+	return A2(
+		_VirtualDom_attribute,
+		'tabIndex',
+		$elm$core$String$fromInt(n));
+};
+var $author$project$Pages$NotFound$view = {
+	content: A2(
+		$elm$html$Html$main_,
+		_List_fromArray(
+			[
+				$elm$html$Html$Attributes$id('content'),
+				$elm$html$Html$Attributes$class('container'),
+				$elm$html$Html$Attributes$tabindex(-1)
+			]),
+		_List_fromArray(
+			[
+				A2(
+				$elm$html$Html$h1,
+				_List_Nil,
+				_List_fromArray(
+					[
+						$elm$html$Html$text('Not Found')
+					])),
+				A2(
+				$elm$html$Html$h1,
+				_List_fromArray(
+					[
+						A2($elm$html$Html$Attributes$style, 'color', 'grey')
+					]),
+				_List_fromArray(
+					[
+						$elm$html$Html$text(' 404')
+					]))
+			])),
+	title: 'Page Not Found'
+};
+var $author$project$Pages$RecallPriority$CloseDetails = {$: 'CloseDetails'};
 var $elm$virtual_dom$VirtualDom$attribute = F2(
 	function (key, value) {
 		return A2(
@@ -5444,15 +8023,967 @@ var $elm$virtual_dom$VirtualDom$attribute = F2(
 			_VirtualDom_noJavaScriptOrHtmlUri(value));
 	});
 var $elm$html$Html$Attributes$attribute = $elm$virtual_dom$VirtualDom$attribute;
-var $elm$html$Html$button = _VirtualDom_node('button');
+var $elm$html$Html$h5 = _VirtualDom_node('h5');
+var $elm$html$Html$span = _VirtualDom_node('span');
+var $elm$html$Html$h4 = _VirtualDom_node('h4');
+var $author$project$Pages$RecallPriority$viewRecallDetails = function (recall) {
+	return _List_fromArray(
+		[
+			A2(
+			$elm$html$Html$h2,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.recallHeading)
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.description)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Date')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.date)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Name of Product')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.nameOfProduct)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Units')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.units)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Manufactured In')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.hazard)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Hazard')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.hazard)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Remedy')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.remedy)
+				])),
+			A2(
+			$elm$html$Html$h4,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text('Incidents')
+				])),
+			A2(
+			$elm$html$Html$p,
+			_List_Nil,
+			_List_fromArray(
+				[
+					$elm$html$Html$text(recall.incidents)
+				]))
+		]);
+};
+var $author$project$Pages$RecallPriority$viewDetailsModal = function (recall) {
+	return A2(
+		$elm$html$Html$div,
+		_List_Nil,
+		_List_fromArray(
+			[
+				A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						A2($elm$html$Html$Attributes$attribute, 'style', 'background-color: rgba(0,0,0,0.5);'),
+						$elm$html$Html$Attributes$class('modal fade show'),
+						$elm$html$Html$Attributes$id('exampleModal'),
+						$elm$html$Html$Attributes$tabindex(-1),
+						A2($elm$html$Html$Attributes$attribute, 'role', 'dialog'),
+						A2($elm$html$Html$Attributes$attribute, 'aria-labelledby', 'exampleModalLabel'),
+						A2($elm$html$Html$Attributes$attribute, 'aria-hidden', 'false'),
+						A2($elm$html$Html$Attributes$style, 'display', 'block')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$div,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('modal-dialog modal-lg'),
+								A2($elm$html$Html$Attributes$attribute, 'role', 'document')
+							]),
+						_List_fromArray(
+							[
+								A2(
+								$elm$html$Html$div,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('modal-content')
+									]),
+								_List_fromArray(
+									[
+										A2(
+										$elm$html$Html$div,
+										_List_fromArray(
+											[
+												$elm$html$Html$Attributes$class('modal-header')
+											]),
+										_List_fromArray(
+											[
+												A2(
+												$elm$html$Html$h5,
+												_List_fromArray(
+													[
+														$elm$html$Html$Attributes$class('modal-title'),
+														$elm$html$Html$Attributes$id('exampleModalLabel')
+													]),
+												_List_fromArray(
+													[
+														$elm$html$Html$text('Recall Details')
+													])),
+												A2(
+												$elm$html$Html$button,
+												_List_fromArray(
+													[
+														$elm$html$Html$Attributes$type_('button'),
+														$elm$html$Html$Attributes$class('close'),
+														A2($elm$html$Html$Attributes$attribute, 'data-dismiss', 'modal'),
+														A2($elm$html$Html$Attributes$attribute, 'aria-label', 'Close'),
+														$elm$html$Html$Events$onClick($author$project$Pages$RecallPriority$CloseDetails)
+													]),
+												_List_fromArray(
+													[
+														A2(
+														$elm$html$Html$span,
+														_List_fromArray(
+															[
+																A2($elm$html$Html$Attributes$attribute, 'aria-hidden', 'true')
+															]),
+														_List_fromArray(
+															[
+																$elm$html$Html$text('×')
+															]))
+													]))
+											])),
+										A2(
+										$elm$html$Html$div,
+										_List_fromArray(
+											[
+												$elm$html$Html$Attributes$class('modal-body')
+											]),
+										$author$project$Pages$RecallPriority$viewRecallDetails(recall))
+									]))
+							]))
+					]))
+			]));
+};
+var $author$project$Pages$RecallPriority$OpenDetails = function (a) {
+	return {$: 'OpenDetails', a: a};
+};
+var $author$project$Pages$RecallPriority$ToggleHighPriority = function (a) {
+	return {$: 'ToggleHighPriority', a: a};
+};
+var $elm$html$Html$h3 = _VirtualDom_node('h3');
+var $elm$html$Html$hr = _VirtualDom_node('hr');
+var $author$project$Pages$RecallPriority$viewRecall = function (recall) {
+	return A2(
+		$elm$html$Html$div,
+		_List_fromArray(
+			[
+				$elm$html$Html$Attributes$class('mx-5 my-3')
+			]),
+		_List_fromArray(
+			[
+				A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('row justify-content-between')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$h3,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('d-inline w-75')
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text(recall.recallHeading)
+							])),
+						A2(
+						$elm$html$Html$div,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('float-right w-25')
+							]),
+						_List_fromArray(
+							[
+								A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('btn btn-secondary mx-1'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$OpenDetails(recall))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('Details')
+									])),
+								recall.highPriority ? A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('btn btn-danger mx-1'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$ToggleHighPriority(recall))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('Unprioritize')
+									])) : A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('btn btn-primary mx-1'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$ToggleHighPriority(recall))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('Prioritize')
+									]))
+							]))
+					])),
+				A2(
+				$elm$html$Html$p,
+				_List_Nil,
+				_List_fromArray(
+					[
+						$elm$html$Html$text(recall.description)
+					])),
+				A2($elm$html$Html$hr, _List_Nil, _List_Nil)
+			]));
+};
+var $author$project$Pages$RecallPriority$SetSearch = function (a) {
+	return {$: 'SetSearch', a: a};
+};
+var $author$project$Pages$RecallPriority$SetSortBy = function (a) {
+	return {$: 'SetSortBy', a: a};
+};
+var $author$project$Pages$RecallPriority$SubmitSearch = {$: 'SubmitSearch'};
+var $author$project$Pages$RecallPriority$viewSearchControls = function (model) {
+	return A2(
+		$elm$html$Html$div,
+		_List_fromArray(
+			[
+				$elm$html$Html$Attributes$id('search-row'),
+				$elm$html$Html$Attributes$class('row align-items-center bg-primary rounded justify-content-between'),
+				A2($elm$html$Html$Attributes$style, 'height', '65px')
+			]),
+		_List_fromArray(
+			[
+				A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('input-group md-form form-sm form-2 pl-3'),
+						A2($elm$html$Html$Attributes$style, 'width', '300px')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$input,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('form-control my-0 py-1 red-border'),
+								$elm$html$Html$Attributes$type_('text'),
+								$elm$html$Html$Attributes$placeholder('Search'),
+								A2($elm$html$Html$Attributes$attribute, 'ariaLabel', 'Search'),
+								$elm$html$Html$Attributes$value(model.searchForm.search),
+								$elm$html$Html$Events$onInput($author$project$Pages$RecallPriority$SetSearch)
+							]),
+						_List_Nil),
+						A2(
+						$elm$html$Html$div,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('input-group-append')
+							]),
+						_List_fromArray(
+							[
+								A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Attributes$class('btn btn-secondary'),
+										$elm$html$Html$Events$onClick($author$project$Pages$RecallPriority$SubmitSearch)
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('Search')
+									]))
+							]))
+					])),
+				A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('dropdown pr-3')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$button,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('btn btn-light dropdown-toggle'),
+								$elm$html$Html$Attributes$type_('button'),
+								$elm$html$Html$Attributes$id('dropdownMenu2'),
+								A2($elm$html$Html$Attributes$attribute, 'data-toggle', 'dropdown'),
+								A2($elm$html$Html$Attributes$attribute, 'aria-haspopup', 'true'),
+								A2($elm$html$Html$Attributes$attribute, 'aria-expanded', 'false')
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text(
+								function () {
+									var _v0 = model.searchForm.sortBy;
+									switch (_v0) {
+										case 'sortable_date':
+											return 'Publish Date';
+										case 'recall_number':
+											return 'Recall Number';
+										case 'high_priority':
+											return 'High Priority';
+										default:
+											return 'Sort By';
+									}
+								}())
+							])),
+						A2(
+						$elm$html$Html$div,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('dropdown-menu'),
+								A2($elm$html$Html$Attributes$attribute, 'aria-labelledby', 'dropdownMenu2')
+							]),
+						_List_fromArray(
+							[
+								A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('dropdown-item'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$SetSortBy('sortable_date'))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('Publish Date')
+									])),
+								A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('dropdown-item'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$SetSortBy('recall_number'))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('Recall Number')
+									])),
+								A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('dropdown-item'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$SetSortBy('high_priority'))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('High Priority')
+									])),
+								A2(
+								$elm$html$Html$button,
+								_List_fromArray(
+									[
+										$elm$html$Html$Attributes$class('dropdown-item'),
+										$elm$html$Html$Attributes$type_('button'),
+										$elm$html$Html$Events$onClick(
+										$author$project$Pages$RecallPriority$SetSortBy(''))
+									]),
+								_List_fromArray(
+									[
+										$elm$html$Html$text('None')
+									]))
+							]))
+					]))
+			]));
+};
+var $author$project$Pages$RecallPriority$view = function (model) {
+	return {
+		content: A2(
+			$elm$html$Html$div,
+			_List_Nil,
+			_List_fromArray(
+				[
+					A2($elm$html$Html$br, _List_Nil, _List_Nil),
+					A2($elm$html$Html$br, _List_Nil, _List_Nil),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('container')
+						]),
+					_List_fromArray(
+						[
+							$author$project$Pages$RecallPriority$viewSearchControls(model)
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('container')
+						]),
+					(!$elm$core$List$length(model.recallList)) ? _List_fromArray(
+						[
+							A2($elm$html$Html$br, _List_Nil, _List_Nil),
+							A2(
+							$elm$html$Html$h2,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('text-danger text-center')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('No recalls found')
+								]))
+						]) : A2($elm$core$List$map, $author$project$Pages$RecallPriority$viewRecall, model.recallList)),
+					A2(
+					$elm$html$Html$div,
+					_List_Nil,
+					_List_fromArray(
+						[
+							function () {
+							var _v0 = model.detailsModal;
+							if (_v0.$ === 'Just') {
+								var recall = _v0.a;
+								return $author$project$Pages$RecallPriority$viewDetailsModal(recall);
+							} else {
+								return $elm$html$Html$text('');
+							}
+						}()
+						]))
+				])),
+		title: 'Recall Prioritization Page'
+	};
+};
+var $author$project$Pages$Register$CancelRegistration = {$: 'CancelRegistration'};
+var $author$project$Pages$Register$SubmitRegistration = {$: 'SubmitRegistration'};
+var $author$project$Pages$Register$UpdateEmail = function (a) {
+	return {$: 'UpdateEmail', a: a};
+};
+var $author$project$Pages$Register$UpdateFirstName = function (a) {
+	return {$: 'UpdateFirstName', a: a};
+};
+var $author$project$Pages$Register$UpdatePassword = function (a) {
+	return {$: 'UpdatePassword', a: a};
+};
+var $author$project$Pages$Register$UpdatePasswordAgain = function (a) {
+	return {$: 'UpdatePasswordAgain', a: a};
+};
+var $author$project$Pages$Register$UpdateUserType = function (a) {
+	return {$: 'UpdateUserType', a: a};
+};
+var $elm$html$Html$datalist = _VirtualDom_node('datalist');
+var $elm$html$Html$Attributes$list = _VirtualDom_attribute('list');
+var $elm$html$Html$option = _VirtualDom_node('option');
+var $elm$html$Html$Attributes$boolProperty = F2(
+	function (key, bool) {
+		return A2(
+			_VirtualDom_property,
+			key,
+			$elm$json$Json$Encode$bool(bool));
+	});
+var $elm$html$Html$Attributes$selected = $elm$html$Html$Attributes$boolProperty('selected');
+var $author$project$Pages$Register$view = function (model) {
+	return {
+		content: A2(
+			$elm$html$Html$div,
+			_List_fromArray(
+				[
+					$elm$html$Html$Attributes$class('container')
+				]),
+			_List_fromArray(
+				[
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$h2,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('col-xl-6 col-lg-10 col-sm-12')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Registration')
+								]))
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row form-group justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$label,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$for('inputEmail'),
+									$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Email')
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$input,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$type_('text'),
+											$elm$html$Html$Attributes$class('form-control'),
+											$elm$html$Html$Attributes$id('inputEmail'),
+											$elm$html$Html$Attributes$placeholder('email@example.com'),
+											$elm$html$Html$Attributes$value(model.form.email),
+											$elm$html$Html$Events$onInput($author$project$Pages$Register$UpdateEmail)
+										]),
+									_List_Nil),
+									function () {
+									var _v0 = model.formErrors.email;
+									if (_v0.$ === 'Just') {
+										var errorMessage = _v0.a;
+										return A2(
+											$elm$html$Html$span,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$class('text-danger')
+												]),
+											_List_fromArray(
+												[
+													$elm$html$Html$text(errorMessage)
+												]));
+									} else {
+										return $elm$html$Html$text('');
+									}
+								}()
+								]))
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row form-group justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$label,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$for('inputFirstName'),
+									$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('First Name')
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$input,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$type_('text'),
+											$elm$html$Html$Attributes$class('form-control'),
+											$elm$html$Html$Attributes$id('inputFirstName'),
+											$elm$html$Html$Attributes$placeholder('First Name'),
+											$elm$html$Html$Attributes$value(model.form.firstName),
+											$elm$html$Html$Events$onInput($author$project$Pages$Register$UpdateFirstName)
+										]),
+									_List_Nil),
+									function () {
+									var _v1 = model.formErrors.firstName;
+									if (_v1.$ === 'Just') {
+										var errorMessage = _v1.a;
+										return A2(
+											$elm$html$Html$span,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$class('text-danger')
+												]),
+											_List_fromArray(
+												[
+													$elm$html$Html$text(errorMessage)
+												]));
+									} else {
+										return $elm$html$Html$text('');
+									}
+								}()
+								]))
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row form-group justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$label,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$for('inputPassword'),
+									$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Password')
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$input,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$type_('password'),
+											$elm$html$Html$Attributes$class('form-control'),
+											$elm$html$Html$Attributes$id('inputPassword'),
+											$elm$html$Html$Attributes$placeholder('Password'),
+											$elm$html$Html$Attributes$value(model.form.password),
+											$elm$html$Html$Events$onInput($author$project$Pages$Register$UpdatePassword)
+										]),
+									_List_Nil),
+									function () {
+									var _v2 = model.formErrors.password;
+									if (_v2.$ === 'Just') {
+										var errorMessage = _v2.a;
+										return A2(
+											$elm$html$Html$span,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$class('text-danger')
+												]),
+											_List_fromArray(
+												[
+													$elm$html$Html$text(errorMessage)
+												]));
+									} else {
+										return $elm$html$Html$text('');
+									}
+								}()
+								]))
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row form-group justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$label,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$for('inputPasswordAgain'),
+									$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Password Again')
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$input,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$type_('password'),
+											$elm$html$Html$Attributes$class('form-control'),
+											$elm$html$Html$Attributes$id('inputPasswordAgain'),
+											$elm$html$Html$Attributes$placeholder('Password'),
+											$elm$html$Html$Attributes$value(model.form.passwordAgain),
+											$elm$html$Html$Events$onInput($author$project$Pages$Register$UpdatePasswordAgain)
+										]),
+									_List_Nil),
+									function () {
+									var _v3 = model.formErrors.passwordAgain;
+									if (_v3.$ === 'Just') {
+										var errorMessage = _v3.a;
+										return A2(
+											$elm$html$Html$span,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$class('text-danger')
+												]),
+											_List_fromArray(
+												[
+													$elm$html$Html$text(errorMessage)
+												]));
+									} else {
+										return $elm$html$Html$text('');
+									}
+								}()
+								]))
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row form-group justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$label,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$for('inputUserType'),
+									$elm$html$Html$Attributes$class('col-sm-2 col-form-label')
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('User Type')
+								])),
+							A2(
+							$elm$html$Html$div,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('col-xl-3 col-lg-5 col-sm-10')
+								]),
+							_List_fromArray(
+								[
+									A2(
+									$elm$html$Html$input,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$class('form-control'),
+											$elm$html$Html$Attributes$id('inputUserType'),
+											$elm$html$Html$Attributes$list('userTypeList'),
+											$elm$html$Html$Events$onInput($author$project$Pages$Register$UpdateUserType)
+										]),
+									_List_Nil),
+									A2(
+									$elm$html$Html$datalist,
+									_List_fromArray(
+										[
+											$elm$html$Html$Attributes$id('userTypeList')
+										]),
+									_List_fromArray(
+										[
+											A2(
+											$elm$html$Html$option,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$value('Manager'),
+													$elm$html$Html$Attributes$selected(true)
+												]),
+											_List_Nil),
+											A2(
+											$elm$html$Html$option,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$value('Investigator')
+												]),
+											_List_Nil),
+											A2(
+											$elm$html$Html$option,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$value('Vendor')
+												]),
+											_List_Nil)
+										])),
+									function () {
+									var _v4 = model.formErrors.userType;
+									if (_v4.$ === 'Just') {
+										var errorMessage = _v4.a;
+										return A2(
+											$elm$html$Html$span,
+											_List_fromArray(
+												[
+													$elm$html$Html$Attributes$class('text-danger')
+												]),
+											_List_fromArray(
+												[
+													$elm$html$Html$text(errorMessage)
+												]));
+									} else {
+										return $elm$html$Html$text('');
+									}
+								}()
+								]))
+						])),
+					A2(
+					$elm$html$Html$div,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('row form-group justify-content-center')
+						]),
+					_List_fromArray(
+						[
+							A2(
+							$elm$html$Html$button,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$type_('button'),
+									$elm$html$Html$Attributes$class('btn btn-primary mx-5'),
+									$elm$html$Html$Events$onClick($author$project$Pages$Register$SubmitRegistration)
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Register')
+								])),
+							A2(
+							$elm$html$Html$button,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$type_('button'),
+									$elm$html$Html$Attributes$class('btn btn-danger mx-5'),
+									$elm$html$Html$Events$onClick($author$project$Pages$Register$CancelRegistration)
+								]),
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Cancel')
+								]))
+						]))
+				])),
+		title: 'Register'
+	};
+};
+var $elm$html$Html$footer = _VirtualDom_node('footer');
+var $author$project$Page$viewFooter = A2($elm$html$Html$footer, _List_Nil, _List_Nil);
+var $elm$html$Html$a = _VirtualDom_node('a');
+var $elm$html$Html$Attributes$alt = $elm$html$Html$Attributes$stringProperty('alt');
 var $elm$html$Html$Attributes$height = function (n) {
 	return A2(
 		_VirtualDom_attribute,
 		'height',
 		$elm$core$String$fromInt(n));
 };
+var $elm$html$Html$Attributes$href = function (url) {
+	return A2(
+		$elm$html$Html$Attributes$stringProperty,
+		'href',
+		_VirtualDom_noJavaScriptUri(url));
+};
 var $elm$html$Html$img = _VirtualDom_node('img');
-var $elm$html$Html$li = _VirtualDom_node('li');
 var $elm$html$Html$nav = _VirtualDom_node('nav');
 var $elm$html$Html$Attributes$src = function (url) {
 	return A2(
@@ -5460,180 +8991,390 @@ var $elm$html$Html$Attributes$src = function (url) {
 		'src',
 		_VirtualDom_noJavaScriptOrHtmlUri(url));
 };
+var $elm$core$List$filter = F2(
+	function (isGood, list) {
+		return A3(
+			$elm$core$List$foldr,
+			F2(
+				function (x, xs) {
+					return isGood(x) ? A2($elm$core$List$cons, x, xs) : xs;
+				}),
+			_List_Nil,
+			list);
+	});
+var $elm$core$Tuple$second = function (_v0) {
+	var y = _v0.b;
+	return y;
+};
+var $elm$html$Html$Attributes$classList = function (classes) {
+	return $elm$html$Html$Attributes$class(
+		A2(
+			$elm$core$String$join,
+			' ',
+			A2(
+				$elm$core$List$map,
+				$elm$core$Tuple$first,
+				A2($elm$core$List$filter, $elm$core$Tuple$second, classes))));
+};
+var $author$project$Page$isActive = F2(
+	function (page, route) {
+		var _v0 = _Utils_Tuple2(page, route);
+		_v0$5:
+		while (true) {
+			switch (_v0.b.$) {
+				case 'Home':
+					if (_v0.a.$ === 'Home') {
+						var _v1 = _v0.a;
+						var _v2 = _v0.b;
+						return true;
+					} else {
+						break _v0$5;
+					}
+				case 'Register':
+					if (_v0.a.$ === 'Register') {
+						var _v3 = _v0.a;
+						var _v4 = _v0.b;
+						return true;
+					} else {
+						break _v0$5;
+					}
+				case 'Login':
+					if (_v0.a.$ === 'Login') {
+						var _v5 = _v0.a;
+						var _v6 = _v0.b;
+						return true;
+					} else {
+						break _v0$5;
+					}
+				case 'Logout':
+					if (_v0.a.$ === 'Logout') {
+						var _v7 = _v0.a;
+						var _v8 = _v0.b;
+						return true;
+					} else {
+						break _v0$5;
+					}
+				default:
+					if (_v0.a.$ === 'RecallPriority') {
+						var _v9 = _v0.a;
+						var _v10 = _v0.b;
+						return true;
+					} else {
+						break _v0$5;
+					}
+			}
+		}
+		return false;
+	});
+var $elm$html$Html$li = _VirtualDom_node('li');
+var $author$project$Page$navbarLink = function (_v0) {
+	var page = _v0.a;
+	var route = _v0.b;
+	var linkContent = _v0.c;
+	return A2(
+		$elm$html$Html$li,
+		_List_fromArray(
+			[
+				$elm$html$Html$Attributes$classList(
+				_List_fromArray(
+					[
+						_Utils_Tuple2('nav-item', true),
+						_Utils_Tuple2(
+						'active',
+						A2($author$project$Page$isActive, page, route))
+					]))
+			]),
+		_List_fromArray(
+			[
+				A2(
+				$elm$html$Html$a,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('nav-link'),
+						$elm$html$Html$Attributes$href(
+						$author$project$Route$routeToString(route))
+					]),
+				linkContent)
+			]));
+};
 var $elm$html$Html$ul = _VirtualDom_node('ul');
+var $author$project$Page$viewAccountInfo = function (session) {
+	if (session.$ === 'Anonymous') {
+		return A2(
+			$elm$html$Html$div,
+			_List_Nil,
+			_List_fromArray(
+				[
+					A2(
+					$elm$html$Html$a,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('navbar-text'),
+							$elm$html$Html$Attributes$href(
+							$author$project$Route$routeToString($author$project$Route$Register))
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text('Register')
+						])),
+					$elm$html$Html$text(' / '),
+					A2(
+					$elm$html$Html$a,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('navbar-text'),
+							$elm$html$Html$Attributes$href(
+							$author$project$Route$routeToString($author$project$Route$Login))
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text('Login')
+						]))
+				]));
+	} else {
+		return A2(
+			$elm$html$Html$div,
+			_List_Nil,
+			_List_fromArray(
+				[
+					A2(
+					$elm$html$Html$a,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('navbar-text'),
+							$elm$html$Html$Attributes$href(
+							$author$project$Route$routeToString($author$project$Route$Logout))
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text('Logout')
+						]))
+				]));
+	}
+};
+var $author$project$Page$viewNavbar = F2(
+	function (session, page) {
+		var menuItems = function () {
+			switch (session.$) {
+				case 'Anonymous':
+					return _List_fromArray(
+						[
+							_Utils_Tuple3(
+							page,
+							$author$project$Route$Home,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Home')
+								]))
+						]);
+				case 'Manager':
+					return _List_fromArray(
+						[
+							_Utils_Tuple3(
+							page,
+							$author$project$Route$Home,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Home')
+								])),
+							_Utils_Tuple3(
+							page,
+							$author$project$Route$RecallPriority,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Recall Prioritization')
+								]))
+						]);
+				case 'Investigator':
+					return _List_fromArray(
+						[
+							_Utils_Tuple3(
+							page,
+							$author$project$Route$Home,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Home')
+								])),
+							_Utils_Tuple3(
+							page,
+							$author$project$Route$RecallPriority,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Recall Prioritization')
+								]))
+						]);
+				default:
+					return _List_fromArray(
+						[
+							_Utils_Tuple3(
+							page,
+							$author$project$Route$Home,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Home')
+								]))
+						]);
+			}
+		}();
+		return _List_fromArray(
+			[
+				A2(
+				$elm$html$Html$button,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('navbar-toggler'),
+						$elm$html$Html$Attributes$type_('button'),
+						A2($elm$html$Html$Attributes$attribute, 'data-toggle', 'collapse'),
+						A2($elm$html$Html$Attributes$attribute, 'data-target', '#navbarNavDropdown'),
+						A2($elm$html$Html$Attributes$attribute, 'aria-controls', 'navbarNavDropdown'),
+						A2($elm$html$Html$Attributes$attribute, 'aria-expanded', 'false'),
+						A2($elm$html$Html$Attributes$attribute, 'aria-label', 'Toggle navigation')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$span,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('navbar-toggler-icon')
+							]),
+						_List_Nil)
+					])),
+				A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('collapse navbar-collapse'),
+						$elm$html$Html$Attributes$id('navbarNavDropdown')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$ul,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('navbar-nav')
+							]),
+						A2($elm$core$List$map, $author$project$Page$navbarLink, menuItems))
+					])),
+				$author$project$Page$viewAccountInfo(session)
+			]);
+	});
 var $elm$html$Html$Attributes$width = function (n) {
 	return A2(
 		_VirtualDom_attribute,
 		'width',
 		$elm$core$String$fromInt(n));
 };
-var $author$project$Page$viewHeader = A2(
-	$elm$html$Html$nav,
-	_List_fromArray(
-		[
-			$elm$html$Html$Attributes$class('navbar navbar-expand-lg navbar-light bg-light justify-content-between')
-		]),
-	_List_fromArray(
-		[
-			A2(
-			$elm$html$Html$a,
+var $author$project$Page$viewHeader = F2(
+	function (session, page) {
+		return A2(
+			$elm$html$Html$nav,
 			_List_fromArray(
 				[
-					$elm$html$Html$Attributes$class('navbar-brand'),
-					$elm$html$Html$Attributes$href('#')
+					$elm$html$Html$Attributes$class('navbar navbar-expand-md navbar-light bg-light justify-content-between')
 				]),
-			_List_fromArray(
-				[
-					A2(
-					$elm$html$Html$img,
+			A2(
+				$elm$core$List$cons,
+				A2(
+					$elm$html$Html$a,
 					_List_fromArray(
 						[
-							$elm$html$Html$Attributes$src('https://www.cpsc.gov/sites/all/themes/cpsc/images/logo.png'),
-							$elm$html$Html$Attributes$alt('Logo'),
-							$elm$html$Html$Attributes$height(30),
-							$elm$html$Html$Attributes$width(30)
-						]),
-					_List_Nil),
-					$elm$html$Html$text(' CPSC Site')
-				])),
-			A2(
-			$elm$html$Html$button,
-			_List_fromArray(
-				[
-					$elm$html$Html$Attributes$class('navbar-toggler'),
-					$elm$html$Html$Attributes$type_('button'),
-					A2($elm$html$Html$Attributes$attribute, 'data-toggle', 'collapse'),
-					A2($elm$html$Html$Attributes$attribute, 'data-target', '#navbarNavDropdown'),
-					A2($elm$html$Html$Attributes$attribute, 'aria-controls', 'navbarNavDropdown'),
-					A2($elm$html$Html$Attributes$attribute, 'aria-expanded', 'false'),
-					A2($elm$html$Html$Attributes$attribute, 'aria-label', 'Toggle navigation')
-				]),
-			_List_fromArray(
-				[
-					A2(
-					$elm$html$Html$span,
-					_List_fromArray(
-						[
-							$elm$html$Html$Attributes$class('navbar-toggler-icon')
-						]),
-					_List_Nil)
-				])),
-			A2(
-			$elm$html$Html$div,
-			_List_fromArray(
-				[
-					$elm$html$Html$Attributes$class('collapse navbar-collapse'),
-					$elm$html$Html$Attributes$id('navbarNavDropdown')
-				]),
-			_List_fromArray(
-				[
-					A2(
-					$elm$html$Html$ul,
-					_List_fromArray(
-						[
-							$elm$html$Html$Attributes$class('navbar-nav')
+							$elm$html$Html$Attributes$class('navbar-brand'),
+							$elm$html$Html$Attributes$href('#')
 						]),
 					_List_fromArray(
 						[
 							A2(
-							$elm$html$Html$li,
+							$elm$html$Html$img,
 							_List_fromArray(
 								[
-									$elm$html$Html$Attributes$class('nav-item active')
+									$elm$html$Html$Attributes$class('my-0'),
+									$elm$html$Html$Attributes$src('https://www.cpsc.gov/sites/all/themes/cpsc/images/logo.png'),
+									$elm$html$Html$Attributes$alt('Logo'),
+									$elm$html$Html$Attributes$height(30),
+									$elm$html$Html$Attributes$width(30)
 								]),
-							_List_fromArray(
-								[
-									A2(
-									$elm$html$Html$a,
-									_List_fromArray(
-										[
-											$elm$html$Html$Attributes$class('nav-link'),
-											$elm$html$Html$Attributes$href('#')
-										]),
-									_List_fromArray(
-										[
-											$elm$html$Html$text('Home'),
-											A2(
-											$elm$html$Html$span,
-											_List_fromArray(
-												[
-													$elm$html$Html$Attributes$class('sr-only')
-												]),
-											_List_fromArray(
-												[
-													$elm$html$Html$text('(current)')
-												]))
-										]))
-								])),
-							A2(
-							$elm$html$Html$li,
-							_List_fromArray(
-								[
-									$elm$html$Html$Attributes$class('nav-item')
-								]),
-							_List_fromArray(
-								[
-									A2(
-									$elm$html$Html$a,
-									_List_fromArray(
-										[
-											$elm$html$Html$Attributes$class('nav-link'),
-											$elm$html$Html$Attributes$href('#')
-										]),
-									_List_fromArray(
-										[
-											$elm$html$Html$text('Features')
-										]))
-								])),
-							A2(
-							$elm$html$Html$li,
-							_List_fromArray(
-								[
-									$elm$html$Html$Attributes$class('nav-item')
-								]),
-							_List_fromArray(
-								[
-									A2(
-									$elm$html$Html$a,
-									_List_fromArray(
-										[
-											$elm$html$Html$Attributes$class('nav-link'),
-											$elm$html$Html$Attributes$href('#')
-										]),
-									_List_fromArray(
-										[
-											$elm$html$Html$text('Pricing')
-										]))
-								]))
-						]))
-				])),
-			A2(
-			$elm$html$Html$span,
-			_List_fromArray(
+							_List_Nil),
+							$elm$html$Html$text(' CPSC Site')
+						])),
+				A2($author$project$Page$viewNavbar, session, page)));
+	});
+var $author$project$Page$viewPage = F3(
+	function (session, page, _v0) {
+		var title = _v0.title;
+		var content = _v0.content;
+		return {
+			body: _List_fromArray(
 				[
-					$elm$html$Html$Attributes$class('navbar-text')
+					A2($author$project$Page$viewHeader, session, page),
+					content,
+					$author$project$Page$viewFooter
 				]),
-			_List_fromArray(
-				[
-					$elm$html$Html$text('Login / Logout')
-				]))
-		]));
-var $author$project$Page$viewPage = function (content) {
-	return A2(
-		$elm$html$Html$div,
-		_List_Nil,
-		_List_fromArray(
-			[$author$project$Page$viewHeader, content, $author$project$Page$viewFooter]));
-};
-var $author$project$Main$view = function (model) {
-	var _v0 = model.cur_page;
-	if (_v0.$ === 'Home') {
-		return $author$project$Page$viewPage($author$project$Pages$Home$view);
-	} else {
-		return $author$project$Page$viewPage($author$project$Pages$Login$view);
+			title: title
+		};
+	});
+var $author$project$Main$view = function (mainModel) {
+	var session = $author$project$Main$toSession(mainModel);
+	var viewPage = F3(
+		function (page, toMsg, _v1) {
+			var title = _v1.title;
+			var content = _v1.content;
+			return A3(
+				$author$project$Page$viewPage,
+				session,
+				page,
+				{
+					content: A2($elm$html$Html$map, toMsg, content),
+					title: title
+				});
+		});
+	switch (mainModel.$) {
+		case 'Redirect':
+			return A3($author$project$Page$viewPage, session, $author$project$Page$Other, $author$project$Pages$Blank$view);
+		case 'NotFound':
+			return A3($author$project$Page$viewPage, session, $author$project$Page$Other, $author$project$Pages$NotFound$view);
+		case 'Home':
+			var model = mainModel.a;
+			return A3(
+				viewPage,
+				$author$project$Page$Home,
+				$author$project$Main$GotHomeMsg,
+				$author$project$Pages$Home$view(model));
+		case 'Register':
+			var model = mainModel.a;
+			return A3(
+				viewPage,
+				$author$project$Page$Register,
+				$author$project$Main$GotRegisterMsg,
+				$author$project$Pages$Register$view(model));
+		case 'Login':
+			var model = mainModel.a;
+			return A3(
+				viewPage,
+				$author$project$Page$Login,
+				$author$project$Main$GotLoginMsg,
+				$author$project$Pages$Login$view(model));
+		case 'Logout':
+			var model = mainModel.a;
+			return A3(
+				viewPage,
+				$author$project$Page$Logout,
+				$author$project$Main$GotLogoutMsg,
+				$author$project$Pages$Logout$view(model));
+		default:
+			var model = mainModel.a;
+			return A3(
+				viewPage,
+				$author$project$Page$RecallPriority,
+				$author$project$Main$GotRecallPriorityMsg,
+				$author$project$Pages$RecallPriority$view(model));
 	}
 };
-var $author$project$Main$main = $elm$browser$Browser$sandbox(
-	{init: $author$project$Main$init, update: $author$project$Main$update, view: $author$project$Main$view});
-_Platform_export({'Main':{'init':$author$project$Main$main(
-	$elm$json$Json$Decode$succeed(_Utils_Tuple0))(0)},'Pages':{'Home':{'init':_VirtualDom_init($author$project$Pages$Home$main)(0)(0)},'Login':{'init':_VirtualDom_init($author$project$Pages$Login$main)(0)(0)}},'Page':{'init':_VirtualDom_init($author$project$Page$main)(0)(0)}});}(this));
+var $author$project$Main$main = $elm$browser$Browser$application(
+	{init: $author$project$Main$init, onUrlChange: $author$project$Main$ChangedUrl, onUrlRequest: $author$project$Main$ClickedLink, subscriptions: $author$project$Main$subscriptions, update: $author$project$Main$update, view: $author$project$Main$view});
+var $author$project$Data$User$main = $elm$html$Html$text('');
+var $author$project$Data$Recall$main = $elm$html$Html$text('');
+var $author$project$App$main = $elm$html$Html$text('');
+_Platform_export({'App':{'init':_VirtualDom_init($author$project$App$main)(0)(0)},'Session':{'init':_VirtualDom_init($author$project$Session$main)(0)(0)},'Route':{'init':_VirtualDom_init($author$project$Route$main)(0)(0)},'Pages':{'Blank':{'init':_VirtualDom_init($author$project$Pages$Blank$main)(0)(0)},'Register':{'init':_VirtualDom_init($author$project$Pages$Register$main)(0)(0)},'RecallPriority':{'init':_VirtualDom_init($author$project$Pages$RecallPriority$main)(0)(0)},'NotFound':{'init':_VirtualDom_init($author$project$Pages$NotFound$main)(0)(0)},'Logout':{'init':_VirtualDom_init($author$project$Pages$Logout$main)(0)(0)},'Login':{'init':_VirtualDom_init($author$project$Pages$Login$main)(0)(0)},'Home':{'init':_VirtualDom_init($author$project$Pages$Home$main)(0)(0)}},'Page':{'init':_VirtualDom_init($author$project$Page$main)(0)(0)},'Main':{'init':$author$project$Main$main(
+	$elm$json$Json$Decode$succeed(_Utils_Tuple0))(0)},'Data':{'Recall':{'init':_VirtualDom_init($author$project$Data$Recall$main)(0)(0)},'User':{'init':_VirtualDom_init($author$project$Data$User$main)(0)(0)}}});}(this));
