@@ -15,6 +15,7 @@ type Page
     | Login
     | Logout
     | RecallPriority
+    | Violation
 
 
 
@@ -57,10 +58,15 @@ viewNavbar session page =
                     [ ( page, Route.Home, [ text "Home" ] ) ]
 
                 Session.Manager _ _ ->
-                    [ ( page, Route.Home, [ text "Home" ] ), ( page, Route.RecallPriority, [ text "Recall Prioritization" ] ) ]
+                    [ ( page, Route.Home, [ text "Home" ] )
+                    , ( page, Route.RecallPriority, [ text "Recall Prioritization" ] )
+                    , ( page, Route.Violation, [ text "Violations" ] )
+                    ]
 
                 Session.Investigator _ _ ->
-                    [ ( page, Route.Home, [ text "Home" ] ), ( page, Route.RecallPriority, [ text "Recall Prioritization" ] ) ]
+                    [ ( page, Route.Home, [ text "Home" ] )
+                    , ( page, Route.Violation, [ text "Violations" ] )
+                    ]
 
                 Session.Vendor _ _ ->
                     [ ( page, Route.Home, [ text "Home" ] ) ]
@@ -101,6 +107,9 @@ isActive page route =
             True
 
         ( RecallPriority, Route.RecallPriority ) ->
+            True
+
+        ( Violation, Route.Violation ) ->
             True
 
         _ ->

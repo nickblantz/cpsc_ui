@@ -23,6 +23,7 @@ type Route
     | Login
     | Logout
     | RecallPriority
+    | Violation
 
 
 parser : Parser (Route -> a) a
@@ -34,6 +35,7 @@ parser =
         , Parser.map Login (s "login")
         , Parser.map Logout (s "logout")
         , Parser.map RecallPriority (s "recall-priority")
+        , Parser.map Violation (s "violations")
         ]
 
 
@@ -86,3 +88,6 @@ routeToPieces route =
 
         RecallPriority ->
             [ "recall-priority" ]
+
+        Violation ->
+            [ "violations" ]

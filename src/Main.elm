@@ -14,6 +14,7 @@ import Pages.Logout as Logout
 import Pages.NotFound as NotFound
 import Pages.RecallPriority as RecallPriority
 import Pages.Register as Register
+import Pages.Violation as Violation
 import Route exposing (Route, replaceUrl)
 import Session exposing (Session, loginUser, logoutUser)
 import Url exposing (Url)
@@ -48,6 +49,7 @@ type Model
     | Logout Logout.Model
     | Register Register.Model
     | RecallPriority RecallPriority.Model
+    | Violation Violation.Model
 
 
 init : blank -> Url -> Nav.Key -> ( Model, Cmd Msg )
@@ -67,6 +69,7 @@ type Msg
     | GotLoginMsg Login.Msg
     | GotLogoutMsg Logout.Msg
     | GotRecallPriorityMsg RecallPriority.Msg
+    | GotViolationMsg Violation.Msg
     | UserLoggedIn
     | ChangedUrl Url
     | ClickedLink Browser.UrlRequest
@@ -107,6 +110,10 @@ update mainMsg mainModel =
         ( GotRecallPriorityMsg msg, RecallPriority model ) ->
             RecallPriority.update msg model
                 |> updateWith RecallPriority GotRecallPriorityMsg mainModel
+
+        ( GotViolationMsg msg, Violation model ) ->
+            Violation.update msg model
+                |> updateWith Violation GotViolationMsg mainModel
 
         ( ClickedLink urlRequest, _ ) ->
             case urlRequest of
@@ -159,6 +166,10 @@ changeRouteTo maybeRoute model =
             RecallPriority.init session
                 |> updateWith RecallPriority GotRecallPriorityMsg model
 
+        Just Route.Violation ->
+            Violation.init session
+                |> updateWith Violation GotViolationMsg model
+
 
 updateWith : (subModel -> Model) -> (subMsg -> Msg) -> Model -> ( subModel, Cmd subMsg ) -> ( Model, Cmd Msg )
 updateWith toModel toMsg model ( subModel, subCmd ) =
@@ -190,6 +201,9 @@ toSession mainModel =
 
         RecallPriority model ->
             RecallPriority.toSession model
+
+        Violation model ->
+            Violation.toSession model
 
 
 
@@ -226,6 +240,9 @@ view mainModel =
 
         RecallPriority model ->
             viewPage Page.RecallPriority GotRecallPriorityMsg (RecallPriority.view model)
+
+        Violation model ->
+            viewPage Page.Violation GotViolationMsg (Violation.view model)
 
 
 

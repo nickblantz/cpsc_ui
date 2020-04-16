@@ -60,7 +60,7 @@ createUser user msg =
     Http.request
         { method = "POST"
         , headers = []
-        , url = "http://localhost:3033/user"
+        , url = "http://api.cpscraper.com/user"
         , body = Http.jsonBody (userEncoder user)
         , expect = Http.expectJson msg userDecoder
         , timeout = Nothing
@@ -73,7 +73,7 @@ loginUser { email, password } msg =
     Http.request
         { method = "POST"
         , headers = []
-        , url = "http://localhost:3033/user/login"
+        , url = "http://api.cpscraper.com/user/login"
         , body = Http.jsonBody (loginEncoder email password)
         , expect = Http.expectJson msg userDecoder
         , timeout = Nothing

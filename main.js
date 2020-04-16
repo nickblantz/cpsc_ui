@@ -5531,6 +5531,8 @@ var $author$project$Session$navKey = function (session) {
 var $elm$browser$Browser$Navigation$replaceUrl = _Browser_replaceUrl;
 var $author$project$Route$routeToPieces = function (route) {
 	switch (route.$) {
+		case 'Root':
+			return _List_Nil;
 		case 'Home':
 			return _List_fromArray(
 				['home']);
@@ -6601,8 +6603,16 @@ var $author$project$Main$changeRouteTo = F2(
 				$elm$core$Platform$Cmd$none);
 		} else {
 			switch (maybeRoute.a.$) {
-				case 'Home':
+				case 'Root':
 					var _v1 = maybeRoute.a;
+					return _Utils_Tuple2(
+						model,
+						A2(
+							$author$project$Route$replaceUrl,
+							$author$project$Session$navKey(session),
+							$author$project$Route$Home));
+				case 'Home':
+					var _v2 = maybeRoute.a;
 					return A4(
 						$author$project$Main$updateWith,
 						$author$project$Main$Home,
@@ -6610,7 +6620,7 @@ var $author$project$Main$changeRouteTo = F2(
 						model,
 						$author$project$Pages$Home$init(session));
 				case 'Login':
-					var _v2 = maybeRoute.a;
+					var _v3 = maybeRoute.a;
 					return A4(
 						$author$project$Main$updateWith,
 						$author$project$Main$Login,
@@ -6618,7 +6628,7 @@ var $author$project$Main$changeRouteTo = F2(
 						model,
 						$author$project$Pages$Login$init(session));
 				case 'Logout':
-					var _v3 = maybeRoute.a;
+					var _v4 = maybeRoute.a;
 					return _Utils_Tuple2(
 						$author$project$Main$Home(
 							{
@@ -6629,7 +6639,7 @@ var $author$project$Main$changeRouteTo = F2(
 							$author$project$Session$navKey(session),
 							$author$project$Route$Home));
 				case 'Register':
-					var _v4 = maybeRoute.a;
+					var _v5 = maybeRoute.a;
 					return A4(
 						$author$project$Main$updateWith,
 						$author$project$Main$Register,
@@ -6637,7 +6647,7 @@ var $author$project$Main$changeRouteTo = F2(
 						model,
 						$author$project$Pages$Register$init(session));
 				default:
-					var _v5 = maybeRoute.a;
+					var _v6 = maybeRoute.a;
 					return A4(
 						$author$project$Main$updateWith,
 						$author$project$Main$RecallPriority,
@@ -6770,6 +6780,7 @@ var $author$project$Route$Login = {$: 'Login'};
 var $author$project$Route$Logout = {$: 'Logout'};
 var $author$project$Route$RecallPriority = {$: 'RecallPriority'};
 var $author$project$Route$Register = {$: 'Register'};
+var $author$project$Route$Root = {$: 'Root'};
 var $elm$url$Url$Parser$Parser = function (a) {
 	return {$: 'Parser', a: a};
 };
@@ -6859,9 +6870,15 @@ var $elm$url$Url$Parser$s = function (str) {
 			}
 		});
 };
+var $elm$url$Url$Parser$top = $elm$url$Url$Parser$Parser(
+	function (state) {
+		return _List_fromArray(
+			[state]);
+	});
 var $author$project$Route$parser = $elm$url$Url$Parser$oneOf(
 	_List_fromArray(
 		[
+			A2($elm$url$Url$Parser$map, $author$project$Route$Root, $elm$url$Url$Parser$top),
 			A2(
 			$elm$url$Url$Parser$map,
 			$author$project$Route$Home,
@@ -7164,11 +7181,6 @@ var $author$project$Pages$RecallPriority$UpdateRecallPriority = function (a) {
 	return {$: 'UpdateRecallPriority', a: a};
 };
 var $elm$core$Basics$not = _Basics_not;
-var $author$project$Pages$RecallPriority$toggleHighPriority = function (recall) {
-	return _Utils_update(
-		recall,
-		{highPriority: !recall.highPriority});
-};
 var $elm$json$Json$Encode$bool = _Json_wrap;
 var $author$project$Data$Recall$recallEncoder = function (recall) {
 	return $elm$json$Json$Encode$object(
@@ -7257,12 +7269,14 @@ var $author$project$Pages$RecallPriority$update = F2(
 						{detailsModal: $elm$core$Maybe$Nothing}),
 					$elm$core$Platform$Cmd$none);
 			case 'ToggleHighPriority':
-				var updatedRecall = cmd.a;
+				var recall = cmd.a;
 				return _Utils_Tuple2(
 					model,
 					A2(
 						$author$project$Data$Recall$updateRecall,
-						$author$project$Pages$RecallPriority$toggleHighPriority(updatedRecall),
+						_Utils_update(
+							recall,
+							{highPriority: !recall.highPriority}),
 						$author$project$Pages$RecallPriority$UpdateRecallPriority));
 			case 'UpdateRecallList':
 				var result = cmd.a;
@@ -9021,9 +9035,9 @@ var $author$project$Page$isActive = F2(
 		var _v0 = _Utils_Tuple2(page, route);
 		_v0$5:
 		while (true) {
-			switch (_v0.b.$) {
+			switch (_v0.a.$) {
 				case 'Home':
-					if (_v0.a.$ === 'Home') {
+					if (_v0.b.$ === 'Home') {
 						var _v1 = _v0.a;
 						var _v2 = _v0.b;
 						return true;
@@ -9031,7 +9045,7 @@ var $author$project$Page$isActive = F2(
 						break _v0$5;
 					}
 				case 'Register':
-					if (_v0.a.$ === 'Register') {
+					if (_v0.b.$ === 'Register') {
 						var _v3 = _v0.a;
 						var _v4 = _v0.b;
 						return true;
@@ -9039,7 +9053,7 @@ var $author$project$Page$isActive = F2(
 						break _v0$5;
 					}
 				case 'Login':
-					if (_v0.a.$ === 'Login') {
+					if (_v0.b.$ === 'Login') {
 						var _v5 = _v0.a;
 						var _v6 = _v0.b;
 						return true;
@@ -9047,21 +9061,23 @@ var $author$project$Page$isActive = F2(
 						break _v0$5;
 					}
 				case 'Logout':
-					if (_v0.a.$ === 'Logout') {
+					if (_v0.b.$ === 'Logout') {
 						var _v7 = _v0.a;
 						var _v8 = _v0.b;
 						return true;
 					} else {
 						break _v0$5;
 					}
-				default:
-					if (_v0.a.$ === 'RecallPriority') {
+				case 'RecallPriority':
+					if (_v0.b.$ === 'RecallPriority') {
 						var _v9 = _v0.a;
 						var _v10 = _v0.b;
 						return true;
 					} else {
 						break _v0$5;
 					}
+				default:
+					break _v0$5;
 			}
 		}
 		return false;

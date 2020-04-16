@@ -87,8 +87,8 @@ update cmd model =
         CloseDetails ->
             ( { model | detailsModal = Nothing }, Cmd.none )
 
-        ToggleHighPriority updatedRecall ->
-            ( model, updateRecall (toggleHighPriority updatedRecall) UpdateRecallPriority )
+        ToggleHighPriority recall ->
+            ( model, updateRecall { recall | highPriority = not recall.highPriority } UpdateRecallPriority )
 
         UpdateRecallList result ->
             case result of
@@ -149,11 +149,6 @@ update cmd model =
                 model.searchForm
                 UpdateRecallList
             )
-
-
-toggleHighPriority : Recall -> Recall
-toggleHighPriority recall =
-    { recall | highPriority = not recall.highPriority }
 
 
 

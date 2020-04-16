@@ -98,7 +98,7 @@ searchRecalls { search, sortBy, limit, offset } msg =
     Http.request
         { method = "POST"
         , headers = []
-        , url = "http://localhost:3033/recall/search"
+        , url = "http://api.cpscraper.com/recall/search"
         , body = Http.jsonBody (searchEncoder search sortBy limit offset)
         , expect = Http.expectJson msg recallListDecoder
         , timeout = Nothing
@@ -121,7 +121,7 @@ updateRecall recall msg =
     Http.request
         { method = "PUT"
         , headers = []
-        , url = "http://localhost:3033/recall/" ++ String.fromInt recall.recallId
+        , url = "http://api.cpscraper.com/recall/" ++ String.fromInt recall.recallId
         , body = Http.jsonBody (recallEncoder recall)
         , expect = Http.expectJson msg recallDecoder
         , timeout = Nothing
