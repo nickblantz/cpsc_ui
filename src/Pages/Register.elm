@@ -101,7 +101,7 @@ update msg model =
         UpdateFirstName firstName ->
             updateForm
                 (\form -> { form | firstName = firstName })
-                (\errorForm -> { errorForm | firstName = validateFirstName firstName })
+                (\errorForm -> { errorForm | firstName = validateString firstName })
                 model
 
         UpdatePassword password ->
@@ -123,7 +123,7 @@ update msg model =
                 model
 
         SubmitRegistration ->
-            if isValid model.formErrors then
+            if isFormValid model.formErrors then
                 ( model, createUser (convertToUser model.form) RegistrationCompleted )
 
             else
@@ -137,28 +137,21 @@ update msg model =
                 Ok _ ->
                     ( model, replaceUrl (navKey model.session) Route.Login )
 
-                Err e ->
+                Err _ ->
                     ( model, Cmd.none )
 
 
-isValid : FormErrors -> Bool
-isValid formErrors =
-    if
-        Maybe.withDefault "" formErrors.email
-            == ""
-            && Maybe.withDefault "" formErrors.firstName
-            == ""
-            && Maybe.withDefault "" formErrors.password
-            == ""
-            && Maybe.withDefault "" formErrors.passwordAgain
-            == ""
-            && Maybe.withDefault "" formErrors.userType
-            == ""
-    then
-        True
-
-    else
-        False
+isFormValid : FormErrors -> Bool
+isFormValid formErrors =
+    let
+        isFieldValid field =
+            Maybe.withDefault "" field == ""
+    in
+    isFieldValid formErrors.email
+        && isFieldValid formErrors.firstName
+        && isFieldValid formErrors.password
+        && isFieldValid formErrors.passwordAgain
+        && isFieldValid formErrors.userType
 
 
 convertToUser : Form -> User
@@ -186,15 +179,15 @@ validateEmail email =
         Just "Invalid Email"
 
 
-validateFirstName : String -> Maybe String
-validateFirstName firstName =
+validateString : String -> Maybe String
+validateString string =
     let
         regex =
             "^[a-zA-Z]+$"
                 |> Regex.fromStringWith { caseInsensitive = True, multiline = False }
                 |> Maybe.withDefault Regex.never
     in
-    if Regex.contains regex firstName then
+    if Regex.contains regex string then
         Nothing
 
     else

@@ -20,7 +20,7 @@ type alias Violation =
     , violationDate : String
     , url : String
     , title : String
-    , investigatorId : Int
+    , investigatorId : Maybe Int
     , recallId : Int
     , violationStatus : String
     }
@@ -28,7 +28,7 @@ type alias Violation =
 
 blankViolation : Violation
 blankViolation =
-    Violation 0 "" "" "" 0 0 ""
+    Violation 0 "" "" "" Nothing 0 ""
 
 
 violationEncoder : Violation -> JE.Value
@@ -38,7 +38,14 @@ violationEncoder violation =
         , ( "violation_date", JE.string violation.violationDate )
         , ( "url", JE.string violation.url )
         , ( "title", JE.string violation.title )
-        , ( "investigator_id", JE.int violation.investigatorId )
+        , ( "investigator_id"
+          , case violation.investigatorId of
+                Just id ->
+                    JE.int id
+
+                Nothing ->
+                    JE.null
+          )
         , ( "recall_id", JE.int violation.recallId )
         , ( "violation_status", JE.string violation.violationStatus )
         ]
@@ -56,7 +63,7 @@ violationDecoder =
         |> required "violation_date" JD.string
         |> required "url" JD.string
         |> required "title" JD.string
-        |> required "investigator_id" JD.int
+        |> required "investigator_id" (JD.nullable JD.int)
         |> required "recall_id" JD.int
         |> required "violation_status" JD.string
 
