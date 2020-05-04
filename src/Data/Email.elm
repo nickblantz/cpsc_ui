@@ -60,6 +60,8 @@ createEmail email msg =
     Http.request
         { method = "POST"
         , headers = []
+
+        -- , url = "http://api.cpscraper.com/email"
         , url = "http://api.cpscraper.com/email"
         , body = Http.jsonBody (emailEncoder email)
         , expect = Http.expectJson msg emailDecoder

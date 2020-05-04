@@ -243,7 +243,7 @@ view model =
                 [ label [ for "inputEmail", class "col-sm-2 col-form-label" ]
                     [ text "Email" ]
                 , div [ class "col-xl-3 col-lg-5 col-sm-10" ]
-                    [ input [ type_ "text", class "form-control", id "inputEmail", placeholder "email@example.com", value model.form.email, onInput UpdateEmail ] []
+                    [ input [ type_ "text", class "form-control", id "inputEmail", placeholder "email@example.com", autofocus True, value model.form.email, onInput UpdateEmail ] []
                     , case model.formErrors.email of
                         Just errorMessage ->
                             span [ class "text-danger" ] [ text errorMessage ]

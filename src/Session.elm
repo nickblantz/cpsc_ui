@@ -101,3 +101,6 @@ logoutUser curSession =
 
 
 port storeUser : String -> Cmd msg
+
+
+port clearUser : () -> Cmd msg

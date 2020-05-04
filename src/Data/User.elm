@@ -40,6 +40,27 @@ userEncoder user =
         ]
 
 
+toString : User -> String
+toString user =
+    userEncoder user
+        |> JE.encode 0
+
+
+fromMaybeString : Maybe String -> Maybe User
+fromMaybeString string =
+    case string of
+        Just userString ->
+            case JD.decodeString userDecoder userString of
+                Ok user ->
+                    Just user
+
+                Err _ ->
+                    Nothing
+
+        Nothing ->
+            Nothing
+
+
 userDecoder : JD.Decoder User
 userDecoder =
     JD.map5 User

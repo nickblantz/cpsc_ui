@@ -2,6 +2,7 @@ module Main exposing (..)
 
 import Browser
 import Browser.Navigation as Nav
+import Data.User exposing (User, fromMaybeString, toString)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick)
@@ -10,13 +11,12 @@ import Page exposing (viewPage)
 import Pages.Blank as Blank
 import Pages.Home as Home
 import Pages.Login as Login exposing (Msg(..))
-import Pages.Logout as Logout
 import Pages.NotFound as NotFound
 import Pages.RecallPriority as RecallPriority
 import Pages.Register as Register
 import Pages.Violation as Violation
 import Route exposing (Route, replaceUrl)
-import Session exposing (Session, loginUser, logoutUser)
+import Session exposing (Session, clearUser, loginUser, logoutUser, storeUser)
 import Url exposing (Url)
 import Url.Parser exposing ((</>), Parser, int, map, oneOf, s, string)
 
@@ -25,7 +25,7 @@ import Url.Parser exposing ((</>), Parser, int, map, oneOf, s, string)
 -- MAIN
 
 
-main : Program () Model Msg
+main : Program (Maybe String) Model Msg
 main =
     Browser.application
         { init = init
@@ -46,17 +46,16 @@ type Model
     | NotFound Session
     | Home Home.Model
     | Login Login.Model
-    | Logout Logout.Model
     | Register Register.Model
     | RecallPriority RecallPriority.Model
     | Violation Violation.Model
 
 
-init : blank -> Url -> Nav.Key -> ( Model, Cmd Msg )
-init maybeAuth url navKey =
+init : Maybe String -> Url -> Nav.Key -> ( Model, Cmd Msg )
+init maybeUserData url navKey =
     changeRouteTo
         (Route.fromUrl url)
-        (Redirect (Session.init navKey Nothing))
+        (Redirect (Session.init navKey (fromMaybeString maybeUserData)))
 
 
 
@@ -67,7 +66,6 @@ type Msg
     = GotHomeMsg Home.Msg
     | GotRegisterMsg Register.Msg
     | GotLoginMsg Login.Msg
-    | GotLogoutMsg Logout.Msg
     | GotRecallPriorityMsg RecallPriority.Msg
     | GotViolationMsg Violation.Msg
     | UserLoggedIn
@@ -94,7 +92,7 @@ update mainMsg mainModel =
                 Login.LoginCompleted result ->
                     case result of
                         Ok user ->
-                            ( Home { session = loginUser session user }, replaceUrl (Session.navKey session) Route.Home )
+                            ( Home { session = loginUser session user }, Cmd.batch [ Cmd.none, saveUser user ] )
 
                         Err _ ->
                             Login.update msg model
@@ -103,9 +101,6 @@ update mainMsg mainModel =
                 _ ->
                     Login.update msg model
                         |> updateWith Login GotLoginMsg mainModel
-
-        ( GotLogoutMsg msg, Logout model ) ->
-            ( Logout (Logout.update msg model), Cmd.none )
 
         ( GotRecallPriorityMsg msg, RecallPriority model ) ->
             RecallPriority.update msg model
@@ -134,6 +129,22 @@ update mainMsg mainModel =
             ( mainModel, Cmd.none )
 
 
+updateWith : (subModel -> Model) -> (subMsg -> Msg) -> Model -> ( subModel, Cmd subMsg ) -> ( Model, Cmd Msg )
+updateWith toModel toMsg model ( subModel, subCmd ) =
+    ( toModel subModel
+    , Cmd.map toMsg subCmd
+    )
+
+
+andThen : (msg -> model -> ( model, Cmd a )) -> msg -> ( model, Cmd a ) -> ( model, Cmd a )
+andThen upd msg ( model, cmd ) =
+    let
+        ( model_, cmd_ ) =
+            upd msg model
+    in
+    ( model_, Cmd.batch [ cmd, cmd_ ] )
+
+
 changeRouteTo : Maybe Route -> Model -> ( Model, Cmd Msg )
 changeRouteTo maybeRoute model =
     let
@@ -156,7 +167,7 @@ changeRouteTo maybeRoute model =
                 |> updateWith Login GotLoginMsg model
 
         Just Route.Logout ->
-            ( Home { session = logoutUser session }, replaceUrl (Session.navKey session) Route.Home )
+            ( Home { session = logoutUser session }, Cmd.batch [ replaceUrl (Session.navKey session) Route.Home, clearUser () ] )
 
         Just Route.Register ->
             Register.init session
@@ -169,13 +180,6 @@ changeRouteTo maybeRoute model =
         Just Route.Violation ->
             Violation.init session
                 |> updateWith Violation GotViolationMsg model
-
-
-updateWith : (subModel -> Model) -> (subMsg -> Msg) -> Model -> ( subModel, Cmd subMsg ) -> ( Model, Cmd Msg )
-updateWith toModel toMsg model ( subModel, subCmd ) =
-    ( toModel subModel
-    , Cmd.map toMsg subCmd
-    )
 
 
 toSession : Model -> Session
@@ -193,9 +197,6 @@ toSession mainModel =
         Login model ->
             Login.toSession model
 
-        Logout model ->
-            Logout.toSession model
-
         Register model ->
             Register.toSession model
 
@@ -204,6 +205,12 @@ toSession mainModel =
 
         Violation model ->
             Violation.toSession model
+
+
+saveUser : User -> Cmd msg
+saveUser user =
+    toString user
+        |> storeUser
 
 
 
@@ -234,9 +241,6 @@ view mainModel =
 
         Login model ->
             viewPage Page.Login GotLoginMsg (Login.view model)
-
-        Logout model ->
-            viewPage Page.Logout GotLogoutMsg (Logout.view model)
 
         RecallPriority model ->
             viewPage Page.RecallPriority GotRecallPriorityMsg (RecallPriority.view model)

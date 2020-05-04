@@ -6,8 +6,7 @@ import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Http
 import Json.Encode as JE
-import Route exposing (Route, replaceUrl)
-import Session exposing (Session, navKey, storeUser)
+import Session exposing (Session, storeUser)
 
 
 
@@ -87,17 +86,10 @@ update msg model =
         LoginCompleted result ->
             case result of
                 Ok user ->
-                    ( model, saveUser user )
+                    ( model, Cmd.none )
 
-                -- ( model, replaceUrl (navKey model.session) Route.Home )
                 Err e ->
                     ( { model | error = "Invalid email or password" }, Cmd.none )
-
-
-saveUser : User -> Cmd msg
-saveUser user =
-    JE.encode 0 (userEncoder user)
-        |> storeUser
 
 
 updateForm : (Form -> Form) -> Model -> ( Model, Cmd Msg )
@@ -124,7 +116,7 @@ view model =
                     [ label [ for "inputEmail", class "col-sm-2 col-form-label" ]
                         [ text "Email" ]
                     , div [ class "col-xl-3 col-lg-5 col-sm-10" ]
-                        [ input [ type_ "text", class "form-control", id "inputEmail", placeholder "email@example.com", value model.form.email, onInput UpdateEmail ] []
+                        [ input [ type_ "text", class "form-control", id "inputEmail", placeholder "email@example.com", autofocus True, value model.form.email, onInput UpdateEmail ] []
                         ]
                     ]
                 , div [ class "row form-group justify-content-center" ]

@@ -1,7 +1,7 @@
 module Pages.Violation exposing (Model, Msg(..), init, toSession, update, view)
 
 import Data.Email exposing (Email, createEmail)
-import Data.Violation exposing (Violation, searchViolations, updateViolation)
+import Data.Violation exposing (Violation, confirmViolation, searchViolations, updateViolation)
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
@@ -102,8 +102,6 @@ type Msg
     | SetViolationStatus Violation String
     | UpdateViolation (Result Http.Error Violation)
     | MarkViolationAsConfirmed Violation ConfirmationForm ConfirmationFormErrors
-    | AndCreateEmail Int ConfirmationForm (Result Http.Error Violation)
-    | CreateEmailResult (Result Http.Error Email)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -170,36 +168,12 @@ update cmd model =
 
         MarkViolationAsConfirmed violation confirmationForm confirmationFormErrors ->
             if isFormValid confirmationFormErrors then
-                ( model
-                , updateViolation { violation | violationStatus = "Confirmed" } (AndCreateEmail violation.violationId confirmationForm)
+                ( { model | confirmationModal = Nothing }
+                , confirmViolation violation { email = confirmationForm.contactEmail, fullName = confirmationForm.fullName } UpdateViolation
                 )
 
             else
                 ( model, Cmd.none )
-
-        AndCreateEmail violationId confirmationForm result ->
-            case result of
-                Ok violation ->
-                    let
-                        updateViolations oldViolation =
-                            if oldViolation.violationId == violation.violationId then
-                                violation
-
-                            else
-                                oldViolation
-
-                        newEmail =
-                            Email -1 confirmationForm.contactEmail confirmationForm.fullName confirmationForm.marketplace violationId
-                    in
-                    ( { model | violationList = List.map updateViolations model.violationList }
-                    , createEmail newEmail CreateEmailResult
-                    )
-
-                Err _ ->
-                    ( model, Cmd.none )
-
-        CreateEmailResult _ ->
-            ( { model | confirmationModal = Nothing }, Cmd.none )
 
 
 isFormValid : ConfirmationFormErrors -> Bool
@@ -351,9 +325,12 @@ viewViolation : Violation -> Html Msg
 viewViolation violation =
     div [ class "mx-5 my-3" ]
         [ div [ class "row justify-content-between" ]
-            [ div [ class "w-75" ]
-                [ h3 [ class "d-inline" ] [ a [ href violation.url, target "_blank" ] [ text violation.title ] ] ]
-            , div [ class "w-25 float-right text-center" ]
+            [ div [ class "text-center w-25" ]
+                [ img [ class "", src ("http://scraper.cpscraper.com/" ++ violation.screenshotFile), style "width" "100%" ] []
+                ]
+            , div [ class "w-50" ]
+                [ h3 [ class "pl-2 d-inline" ] [ a [ href violation.url, target "_blank" ] [ text violation.title ] ] ]
+            , div [ class "w-25 text-center" ]
                 (if violation.violationStatus == "Possible" then
                     [ button [ class "btn btn-secondary m-1", type_ "button", onClick (OpenDetails violation) ] [ text "Details" ]
                     , button [ class "btn btn-success m-1", type_ "button", onClick (SetViolationStatus violation "Passed") ] [ text "Pass Listing" ]
@@ -479,7 +456,7 @@ viewConfirmationDetails violation confirmationForm confirmationFormErrors =
             ]
         ]
     , div [ class "row form-group justify-content-center" ]
-        [ button [ type_ "button", class "btn btn-primary mx-5", onClick (MarkViolationAsConfirmed violation confirmationForm confirmationFormErrors) ] [ text "Register" ]
+        [ button [ type_ "button", class "btn btn-primary mx-5", onClick (MarkViolationAsConfirmed violation confirmationForm confirmationFormErrors) ] [ text "Confirm" ]
         , button [ type_ "button", class "btn btn-danger mx-5", onClick CloseConfirmationForm ] [ text "Cancel" ]
         ]
     ]
