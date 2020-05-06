@@ -1,4 +1,5 @@
 # CPSC User Interface
+This is the user interface for the CPSC project
 
-## Run
-Execute `build.bat`
+## Running
+`elm-app start`
